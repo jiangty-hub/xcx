@@ -24,16 +24,14 @@
 				<view class="floor-img-box">
 					<!--左侧大图片盒子-->
 					<view class="left-img-box">
-						<image :src="item[0].image_src" :style="{ width: '303rpx' }" mode="widthFix"></image>
+						<image :src="item[0].image_src" :style="{ width: '303rpx', borderRadius: '16rpx' }" mode="widthFix"></image>
 					</view>
 					<!--右侧小图片盒子-->
 					<view class="right-img-box">
-						<view class="right-img-item">
-							<image :src="item[1].image_src" :style="{ width: '220rpx' }" mode="widthFix">></image>
-							<image :src="item[2].image_src" :style="{ width: '220rpx' }" mode="widthFix">></image>
-							<image :src="item[3].image_src" :style="{ width: '220rpx' }" mode="widthFix">></image>
-							<image :src="item[4].image_src" :style="{ width: '220rpx' }" mode="widthFix">></image>
-						</view>
+						<image :src="item[1].image_src" :style="{ width: '220rpx', borderRadius: '16rpx' }" mode="widthFix">></image>
+						<image :src="item[2].image_src" :style="{ width: '220rpx', borderRadius: '16rpx' }" mode="widthFix">></image>
+						<image :src="item[3].image_src" :style="{ width: '220rpx', borderRadius: '16rpx' }" mode="widthFix">></image>
+						<image :src="item[4].image_src" :style="{ width: '220rpx', borderRadius: '16rpx' }" mode="widthFix">></image>
 					</view>
 				</view>
 			</view>
@@ -98,7 +96,7 @@ import { showRequestError } from '@/main.js'
 		  				this.floorList = res.data
 		      },
 		      fail: (err) => {
-		        this.$showError(err, '图标加载失败', 1500)
+		        this.$showError(err, '图片加载失败', 1500)
 		      }
 		    })
 		  }
