@@ -1,5 +1,7 @@
 <template>
 	<view>
+		<!--使用自定义的搜索组件-->
+		<my-search @click="gotoSearch"></my-search>
 		<view class="scroll-view-container">
 			<!--左侧滑动区域-->
 			<scroll-view class="left-srcoll-view" scroll-y="true" :style="{height: wh + 'px'}">
@@ -37,25 +39,29 @@
 				scrollTop: 0
 			};
 		},
-		onLoad() {
-			const sysInfo = uni.getSystemInfoSync()
-			this.wh = sysInfo.windowHeight
-			//调用获取分类列表数组
+		onShow() {
+			const sysInfo = uni.getWindowInfo()
+			this.wh = sysInfo.windowHeight - 50
 			this.getCateList()
+			const category = wx.getStorageSync('selectedCategory');
+			if (category) {
+				// 使用完可以选择清掉
+				wx.removeStorageSync('selectedCategory');
+			}
 		},
 		methods: {
 			//获取分类列表数组
 			getCateList() {
 				uni.request({
-				  url: 'https://raw.githubusercontent.com/jiangty-hub/uniFenLei/main/FenLei.json',
-				  method: 'GET',
-				  success: (res) => {
-					this.cateList = res.data.message
-					this.cateLevel = res.data.message[0].children
-				  },
-				  fail: (err) => {
-				    this.$showError(err, '图片加载失败', 1500)
-				  }
+					url: 'https://raw.githubusercontent.com/jiangty-hub/uniFenLei/main/FenLei.json',
+					method: 'GET',
+					success: (res) => {
+						this.cateList = res.data.message
+						this.cateLevel = res.data.message[0].children
+					},
+					fail: (err) => {
+						this.$showError(err, '图片加载失败', 1500)
+					}
 				})
 			},
 			activeChanged(i) {
@@ -64,11 +70,20 @@
 				this.cateLevel = this.cateList[i].children
 				//重新让滚动条归0/1
 				this.scrollTop = this.scrollTop === 0 ? 1 : 0
+				// 同步到全局变量
+				const app = getApp();
+				app.globalData.currentCategory = this.cateList[i].cate_name;
 			},
 			//跳转到菜品详细页面
 			gotoGoodsDetail(item) {
 				uni.navigateTo({
 					url:'/subpkg/goods_detail/goods_detail?cid=' + item.cate_id
+				})
+			},
+			//跳转到search页面
+			gotoSearch() {
+				uni.navigateTo({
+					url: '/subpkg/search/search'
 				})
 			}
 		}

@@ -17,6 +17,12 @@
 				{
 					"path": "goods_detail/goods_detail",
 					"style": {}
+				},
+				{
+					"path": "search/search",
+					"style": {
+						"navigationBarTitleText": ""
+					}
 				}
 			]
 		}
