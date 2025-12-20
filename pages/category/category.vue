@@ -39,14 +39,21 @@
 				scrollTop: 0
 			};
 		},
-		onShow() {
+		onLoad() {
 			const sysInfo = uni.getWindowInfo()
 			this.wh = sysInfo.windowHeight - 50
 			this.getCateList()
-			const category = wx.getStorageSync('selectedCategory');
-			if (category) {
-				// 使用完可以选择清掉
-				wx.removeStorageSync('selectedCategory');
+		},
+		onShow() {
+			// 恢复之前选中的分类
+			const app = getApp();
+			if (app.globalData.currentCategory) {
+				const index = this.cateList.findIndex(item => 
+					item.cate_name === app.globalData.currentCategory
+				);
+				if (index !== -1 && index !== this.active) {
+					this.activeChanged(index);
+				}
 			}
 		},
 		methods: {
@@ -58,6 +65,14 @@
 					success: (res) => {
 						this.cateList = res.data.message
 						this.cateLevel = res.data.message[0].children
+						const selectedCategory = wx.getStorageSync('selectedCategory')
+						if (selectedCategory) {
+							const index = this.cateList.findIndex(item => item.cate_name === selectedCategory || item.cate_name.replace(/类$/, '') === selectedCategory)
+							if (index !== -1) {
+								this.activeChanged(index)
+							}
+							wx.removeStorageSync('selectedCategory')
+						}
 					},
 					fail: (err) => {
 						this.$showError(err, '图片加载失败', 1500)

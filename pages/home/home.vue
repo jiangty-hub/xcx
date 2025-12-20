@@ -6,16 +6,16 @@
 		</view>
 		<!--轮播图区域-->
 		<swiper :indicator-dots="true" :autoplay="true" :interval="3000" :duration="1000" :circular="true">
-			<swiper-item v-for="(item, i) in swiperList" :key="i">
-				<navigator class="swiper-item" :url="'/subpkg/goods_detail/goods_detail?goods_id=' + item.goods_id">
-					<image :src="item.image_src"></image>
-				</navigator>
+			<swiper-item class="swiper-item" v-for="(item, i) in swiperList" :key="i">
+				<image :src="item.image_src"></image>
 			</swiper-item>
 		</swiper>
 		<!--分类导航区域-->
 		<view class="nav-list">
 			<view class="nav-item" v-for="(item, i) in navList" :key="i" @click="nacClickHandler(item)">
-				<image :src="item.icon" class="nav-icon"></image>
+				<view class="nav-icon-box">
+					<image class="nav-icon" :src="item.icon"></image>
+				</view>
 				<text class="nav-text">{{ item.name }}</text>
 			</view>
 		</view>
@@ -129,22 +129,32 @@ swiper {
 .nav-list {
 	display: flex;
 	flex-wrap: wrap; /* 允许换行 */
-	justify-content: space-around; /* 每行左右间距均分 */
-	margin: 20px 35px;
+	padding: 0 20rpx;
 	
 	.nav-item {
+		width: 25%; 
 	    display: flex;
 	    flex-direction: column; /* 图标在上，文字在下 */
 	    align-items: center;
-	    margin-bottom: 20rpx;
+	    padding: 20rpx 0;
+	}
+	.nav-icon-box {
+		width: 130rpx;
+		height: 130rpx;
+		background-color: #f6f6f6;
+		border-radius: 26rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
 	.nav-icon {
-		width: 130rpx;           /* 固定宽度 */
-		height: 130rpx;          /* 固定高度 */
+		width: 120rpx;           /* 固定宽度 */
+		height: 120rpx;          /* 固定高度 */
 		object-fit: contain;     /* 保持比例 */
 	}
 	.nav-text {
 	    font-size: 28rpx;
+		margin-top: 10rpx;
 	    text-align: center;
 	}
 }
