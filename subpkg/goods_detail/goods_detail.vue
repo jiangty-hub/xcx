@@ -1,123 +1,156 @@
 <template>
 	<view class="page">
-		<!--菜品轮播图-->
+		<!-- 菜品轮播图 -->
 		<swiper class="dish-swiper" :indicator-dots="true" :autoplay="true" :interval="3000" :duration="1000" :circular="true" indicator-color="rgba(255, 255, 255, 0.5)" indicator-active-color="#ff6b35">
-			<swiper-item v-for="(item, i) in cid_info.images" :key="i">
-				<image class="dish-images" :src="item"></image>
+			<swiper-item v-for="(item, i) in dishImages" :key="i">
+				<image class="dish-images" :src="fixImg(item)" mode="aspectFill"></image>
 			</swiper-item>
 		</swiper>
+
 		<!-- 菜品主要信息 -->
 		<view class="dish-main-card">
 			<view class="dish-header">
-				<view class="dish-name">{{cid_info.name}}</view>
-				<view class="dish-category">{{cid_info.category}}</view>
+				<view class="dish-name">{{ cid_info.name }}</view>
+				<view class="dish-category">{{ cid_info.category }}</view>
 			</view>
-		<view class="dish-tags">
-			<text class="tag" v-for="(tag, index) in cid_info.tags" :key="index">{{tag}}</text>
-		</view>
-		<view class="dish-price-row">
-			<view class="price-box">
-				<text class="price-symbol">¥</text>
-				<text class="price-value">{{formatPrice(cid_info.price)}}</text>
-				<text class="tax">（税込）</text>
+
+			<view class="dish-tags">
+				<text class="tag" v-for="(tag, index) in (cid_info.tags || [])" :key="index">{{ tag }}</text>
 			</view>
+
+			<view class="dish-price-row">
+				<view class="price-box">
+					<text class="price-symbol">¥</text>
+					<text class="price-value">{{ formatPrice(cid_info.price) }}</text>
+					<text class="tax">（税込）</text>
+				</view>
+			</view>
+
+			<view class="dish-summary">{{ cid_info.summary }}</view>
 		</view>
-		<view class="dish-summary">{{cid_info.summary}}</view>
-		</view>
+
 		<!-- 菜品属性 -->
 		<view class="dish-attributes">
 			<view class="attr-item">
 				<view class="attr-icon">🌶️</view>
 				<view class="attr-label">口味</view>
-				<view class="attr-value">{{cid_info.flavor}}</view>
+				<view class="attr-value">{{ cid_info.flavor }}</view>
 			</view>
 			<view class="attr-item">
 				<view class="attr-icon">⏱️</view>
 				<view class="attr-label">时长</view>
-				<view class="attr-value">{{cid_info.cook_time}}分钟</view>
+				<view class="attr-value">{{ cid_info.cook_time }}分钟</view>
 			</view>
 			<view class="attr-item">
 				<view class="attr-icon">👨‍🍳</view>
 				<view class="attr-label">难度</view>
-				<view class="attr-value">{{cid_info.difficulty}}</view>
+				<view class="attr-value">{{ cid_info.difficulty }}</view>
 			</view>
 		</view>
+
 		<!-- 食材清单 -->
 		<view class="section-card">
 			<view class="section-title">
 				<view class="title-text">🥘 食材清单</view>
 			</view>
 			<view class="ingredients-list">
-				<view class="ingredient-item" v-for="(item, index) in cid_info.ingredients" :key="index">
+				<view class="ingredient-item" v-for="(item, index) in (cid_info.ingredients || [])" :key="index">
 					<view class="ingredient-dot"></view>
-					<text class="ingredient-name">{{item.name}}</text>
+					<text class="ingredient-name">{{ item.name || item }}</text>
 				</view>
 			</view>
 		</view>
+
 		<!-- 制作步骤 -->
 		<view class="section-card">
 			<view class="section-title">
 				<view class="title-text">📝 制作步骤</view>
 			</view>
 			<view class="steps-list">
-				<view class="step-item" v-for="(step, index) in cid_info.steps" :key="index">
-					<view class="step-number">{{index + 1}}</view>
-					<view class="step-content">{{step}}</view>
+				<view class="step-item" v-for="(step, index) in (cid_info.steps || [])" :key="index">
+					<view class="step-number">{{ index + 1 }}</view>
+					<view class="step-content">{{ step }}</view>
 				</view>
 			</view>
 		</view>
+
 		<!-- 底部操作按钮 -->
 		<view class="bottom-actions">
-			<view class="action-btn collect-btn">
-				<text class="btn-icon">♥</text>
-				<text class="btn-text">收藏</text>
+			<view class="action-btn collect-btn" @click="onDelete">
+				<text class="btn-icon">🗑️</text>
+				<text class="btn-text">删除菜品</text>
 			</view>
-			<view class="action-btn primary-btn">
-				<text class="btn-text">开始制作</text>
+			<view class="action-btn primary-btn" @click="onEdit">
+				<text class="btn-icon">📝</text>
+				<text class="btn-text">修改菜品</text>
 			</view>
 		</view>
 	</view>
 </template>
 
 <script>
-	export default {
-		data() {
-			return {
-				cid_info: {}
-			};
-		},
-		onLoad(options) {
-			const cid = options.cid
-			this.getCidDetail(cid)
-		},
-		methods: {
-			getCidDetail(cid) {
-				uni.request({
-					url: 'https://raw.githubusercontent.com/jiangty-hub/uniShangPinXQ/main/XQ.json',
-					method: 'GET',
-					success: (res) => {
-						const list = res.data.dishes || []
-						const dish = list.find(item => item.cate_id === cid)
-					if (dish) {
-						this.cid_info = dish
-						} else {
-							uni.showToast({
-								title: '未找到菜品',
-								icon: 'none',
-							})
-					}
-			    },
-			    fail: (err) => {
-			      this.$showError(err, '轮播图加载失败', 1500)
-			    }
-			  })
-			},
-			formatPrice(price) {
-				// 格式化价格显示
-				return price || '000'
+const foodService = uniCloud.importObject('food-service')
+
+export default {
+	data() {
+		return {
+			cid_info: {},
+			loading: false
+		}
+	},
+
+	async onLoad(options) {
+		// 分类页现在传的是 ?id=foods._id
+		const id = options.id
+		if (!id) {
+			uni.showToast({ title: '缺少菜品id', icon: 'none' })
+			return
+		}
+		await this.getDishDetailById(id)
+	},
+
+	computed: {
+		// 兼容：有 images 用 images；没有就用 cover_images；再没有就给空数组
+		dishImages() {
+			const a = this.cid_info?.images
+			if (Array.isArray(a) && a.length) return a
+			const b = this.cid_info?.cover_images
+			if (Array.isArray(b) && b.length) return b
+			return []
+		}
+	},
+
+	methods: {
+		// 调云对象拿详情
+		async getDishDetailById(id) {
+			try {
+				this.loading = true
+				const dish = await foodService.getFoodDetail(id)
+
+				// 可选：如果你 foods 表里没有 category（文字），只有 categoryId，
+				// 你可以暂时先不显示 category，或者后面再做“通过 categoryId 查分类名”的云端聚合。
+				this.cid_info = dish || {}
+			} catch (err) {
+				uni.showToast({ title: '未找到菜品', icon: 'none' })
+				console.error(err)
+			} finally {
+				this.loading = false
 			}
+		},
+
+		// 修正图片 url（你之前遇到 https:%20// 的问题，详情页也一起防一手）
+		fixImg(url) {
+			if (!url) return '/static/cover-default.png'
+			let fixed = String(url).replace(/\s+/g, '')
+			fixed = fixed.replace(/^https:\/*/i, 'https://')
+			return fixed
+		},
+
+		formatPrice(price) {
+			return price || '000'
 		}
 	}
+}
 </script>
 
 <style lang="scss">

@@ -1,0 +1,7 @@
+{
+  "name": "update-user-profile",
+  "dependencies": {},
+  "extensions": {
+    "uni-cloud-jql": {}
+  }
+}

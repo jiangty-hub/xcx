@@ -1,19 +1,9 @@
 
 // #ifndef VUE3
-//封装弹框的方法
-function showRequestError(err, msg = '请求失败，请稍后重试', duration = 1500) {
-  console.error(msg, err)
-  uni.showToast({
-    title: msg,
-    icon: 'none',
-    duration
-  })
-}
+
 import Vue from 'vue'
 import App from './App'
 
-// 挂到 Vue 实例
-Vue.prototype.$showError = showRequestError
 //导入网络请求的包
 import { $http } from '@escook/request-miniprogram'
 
@@ -45,6 +35,18 @@ import { createSSRApp } from 'vue'
 import App from './App.vue'
 export function createApp() {
   const app = createSSRApp(App)
+  app.config.globalProperties.$showError = function (
+      err,
+      msg = '请求失败',
+      duration = 1500
+    ) {
+      console.error(msg, err)
+      uni.showToast({
+        title: msg,
+        icon: 'none',
+        duration
+      })
+    }
   return {
     app
   }

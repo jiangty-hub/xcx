@@ -28,14 +28,14 @@
 				<view class="floor-img-box">
 					<!--左侧大图片盒子-->
 					<view class="left-img-box">
-						<image :src="item[0].image_src" :style="{ width: '303rpx', borderRadius: '16rpx' }" mode="widthFix"></image>
+						<image :src="item[0].image_src" class="floor-img-big"></image>
 					</view>
 					<!--右侧小图片盒子-->
 					<view class="right-img-box">
-						<image :src="item[1].image_src" :style="{ width: '220rpx', borderRadius: '16rpx' }" mode="widthFix">></image>
-						<image :src="item[2].image_src" :style="{ width: '220rpx', borderRadius: '16rpx' }" mode="widthFix">></image>
-						<image :src="item[3].image_src" :style="{ width: '220rpx', borderRadius: '16rpx' }" mode="widthFix">></image>
-						<image :src="item[4].image_src" :style="{ width: '220rpx', borderRadius: '16rpx' }" mode="widthFix">></image>
+						<image :src="item[1].image_src" class="floor-img-small"></image>
+						<image :src="item[2].image_src" class="floor-img-small"></image>
+						<image :src="item[3].image_src" class="floor-img-small"></image>
+						<image :src="item[4].image_src" class="floor-img-small"></image>
 					</view>
 				</view>
 			</view>
@@ -58,54 +58,51 @@ import { showRequestError } from '@/main.js'
 			}
 		},
 		onLoad() {
-			this.getSwiperList()
-			this.getNavList()
-			this.getFloorList()
+			this.getBanner()
+			this.getIcon()
+			this.getFloor()
 		},
 		methods: {
-		  getSwiperList() {
-		    uni.request({
-		      url: 'https://raw.githubusercontent.com/jiangty-hub/uniPicture/main/picture.json',
-		      method: 'GET',
+		  getBanner() {
+		    uniCloud.callFunction({
+		      name: 'getBanner',
 		      success: (res) => {
-				this.swiperList = res.data
+				this.swiperList = res.result.data
 		      },
 		      fail: (err) => {
 		        this.$showError(err, '轮播图加载失败', 1500)
 		      }
 		    })
 		  },
-		  getNavList() {
-		    uni.request({
-		      url: 'https://raw.githubusercontent.com/jiangty-hub/uniIcon/main/icon.json',
-		      method: 'GET',
+		  getIcon() {
+		    uniCloud.callFunction({
+		      name: 'getIcon',
 		      success: (res) => {
-		  				this.navList = res.data
+		  		this.navList = res.result.data
 		      },
 		      fail: (err) => {
 		        this.$showError(err, '图标加载失败', 1500)
 		      }
 		    })
 		  },
-		  nacClickHandler(item) {
-			  //把参数存储到本地
-			  wx.setStorageSync('selectedCategory', item.name)
-			  //跳转 tabBar 页面
-			  uni.switchTab({
-				url: '/pages/category/category'
-			  });
-		  },
-		  getFloorList() {
-		    uni.request({
-		      url: 'https://raw.githubusercontent.com/jiangty-hub/uniNashou/main/nashou.json',
-		      method: 'GET',
+		  getFloor() {
+		    uniCloud.callFunction({
+		      name: 'getFloor',
 		      success: (res) => {
-		  				this.floorList = res.data
+		  		this.floorList = res.result.data
 		      },
 		      fail: (err) => {
 		        this.$showError(err, '图片加载失败', 1500)
 		      }
 		    })
+		  },
+		  nacClickHandler(item) {
+		  	//把参数存储到本地
+		  	wx.setStorageSync('selectedCategory', item.name)
+		  	//跳转 tabBar 页面
+		  	uni.switchTab({
+		  		url: '/pages/category/category'
+		  	});
 		  },
 		  gotoSearch() {
 			  uni.navigateTo({
@@ -180,5 +177,17 @@ swiper {
 	position: sticky;
 	top: 0;
 	z-index: 999;
+}
+.floor-img-big {
+	width: 303rpx;
+	height: 420rpx;   /* 你可以根据设计微调 */
+	border-radius: 16rpx;
+	object-fit: cover;
+}
+.floor-img-small {
+	width: 220rpx;
+	height: 200rpx;
+	border-radius: 16rpx;
+	object-fit: cover;
 }
 </style>

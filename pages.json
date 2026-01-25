@@ -8,6 +8,18 @@
 	},
 	{
 		"path": "pages/my/my"
+	},
+	{
+		"path": "components/notlogin"
+	},
+	{
+		"path": "components/loggedin"
+	},
+	{
+	  "path": "pages/profile/edit",
+	  "style": {
+	    "navigationBarTitleText": "修改资料"
+	  }
 	}
 ],
 	"subPackages": [

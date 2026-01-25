@@ -1,0 +1,25 @@
+{
+    "name": "uni-id-cf",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+		"uni-id": "file:..\/..\/..\/..\/uni-id\/uniCloud\/cloudfunctions\/common\/uni-id",
+		"uni-id-common": "file:..\/..\/..\/..\/uni-config-center\/uniCloud\/cloudfunctions\/common\/uni-id-common",
+		"uni-open-bridge-common": "file:..\/..\/..\/..\/uni-config-center\/uniCloud\/cloudfunctions\/common\/uni-open-bridge-common",
+        "uni-captcha": "file:..\/..\/..\/..\/uni-captcha\/uniCloud\/cloudfunctions\/common\/uni-captcha",
+        "uni-config-center": "file:..\/..\/..\/..\/uni-config-center\/uniCloud\/cloudfunctions\/common\/uni-config-center"
+    },
+    "extensions": {
+        "uni-cloud-verify": {}
+    },
+    "origin-plugin-dev-name": "uni-id-cf",
+    "origin-plugin-version": "1.0.16",
+    "plugin-dev-name": "uni-id-cf",
+    "plugin-version": "1.0.16"
+}

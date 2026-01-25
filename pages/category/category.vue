@@ -3,21 +3,21 @@
 		<!--使用自定义的搜索组件-->
 		<my-search @click="gotoSearch"></my-search>
 		<view class="scroll-view-container">
-			<!--左侧滑动区域-->
+			<!--左侧分类区域-->
 			<scroll-view class="left-srcoll-view" scroll-y="true" :style="{height: wh + 'px'}">
 				<block v-for="(item, i) in cateList" :key="i">
-					<view :class="['left-scroll-view-item', i === active ? 'active' : '']" @click="activeChanged(i)">{{item.cate_name}}</view>
+					<view :class="['left-scroll-view-item', i === active ? 'active' : '']" @click="activeChanged(i)">{{ item.name }}</view>
 				</block>
 			</scroll-view>
-			<!--右侧滑动区域-->
+			<!--右侧菜品区域-->
 			<scroll-view scroll-y="true" :style="{height: wh + 'px'}" :scroll-top="scrollTop">
 				<!-- 实际做 flex 的地方 -->
 				<view class="right-scroll-view">
 					<view class="right-scroll-view-item" v-for="(item, i2) in cateLevel" :key="i2" @click="gotoGoodsDetail(item)">
-						<!--图片-->
-						<image :src="item.cate_jpg" class="item-image"></image>
+						<!--图片 cover_images[0]-->
+						<image :src="getCover(item)" class="item-image" mode="aspectFill"></image>
 						<!--文本-->
-						<text class="item-text">{{item.cate_name}}</text>
+						<text class="item-text">{{item.name}}</text>
 					</view>
 				</view>
 			</scroll-view>
@@ -26,6 +26,7 @@
 </template>
 
 <script>
+	const foodService = uniCloud.importObject('food-service')
 	export default {
 		data() {
 			return {
@@ -39,60 +40,74 @@
 				scrollTop: 0
 			};
 		},
-		onLoad() {
+		async onLoad() {
 			const sysInfo = uni.getWindowInfo()
 			this.wh = sysInfo.windowHeight - 50
-			this.getCateList()
+			await this.getCateList()
 		},
 		onShow() {
-			// 恢复之前选中的分类
-			const app = getApp();
-			if (app.globalData.currentCategory) {
-				const index = this.cateList.findIndex(item => 
-					item.cate_name === app.globalData.currentCategory
-				);
-				if (index !== -1 && index !== this.active) {
-					this.activeChanged(index);
-				}
-			}
-		},
-		methods: {
-			//获取分类列表数组
-			getCateList() {
-				uni.request({
-					url: 'https://raw.githubusercontent.com/jiangty-hub/uniFenLei/main/FenLei.json',
-					method: 'GET',
-					success: (res) => {
-						this.cateList = res.data.message
-						this.cateLevel = res.data.message[0].children
-						const selectedCategory = wx.getStorageSync('selectedCategory')
-						if (selectedCategory) {
-							const index = this.cateList.findIndex(item => item.cate_name === selectedCategory || item.cate_name.replace(/类$/, '') === selectedCategory)
-							if (index !== -1) {
-								this.activeChanged(index)
-							}
-							wx.removeStorageSync('selectedCategory')
-						}
-					},
-					fail: (err) => {
-						this.$showError(err, '图片加载失败', 1500)
-					}
-				})
+				// onShow 里也保留一份：防止你从其它页面回来时再次定位分类
+				this.applySelectedCategoryFromStorage()
 			},
-			activeChanged(i) {
+		methods: {
+			// 封面兜底：cover_images[0] 没有就给默认图
+			getCover(food) {
+				if (food && Array.isArray(food.cover_images) && food.cover_images.length > 0 && food.cover_images[0]) {
+					return food.cover_images[0]
+				}
+			},
+			// 从 storage 读取 home 传来的分类，并切换
+			async applySelectedCategoryFromStorage() {
+				const selectedCategory = wx.getStorageSync('selectedCategory')
+				if (!selectedCategory) return
+				if (!this.cateList || this.cateList.length === 0) return
+				const index = this.cateList.findIndex(item =>
+						item.name === selectedCategory ||
+						item.name.replace(/类$/, '') === selectedCategory
+					)
+			
+					if (index !== -1) {
+						await this.activeChanged(index)
+					}
+					wx.removeStorageSync('selectedCategory')
+			},	
+			//获取分类列表数组
+			async getCateList() {
+				try {
+					const categories = await foodService.getCategories()
+					this.cateList = categories || []
+					// 默认加载第一个分类的右侧菜品
+					if (this.cateList.length > 0) {
+						const firstCateId = this.cateList[0].cate_id
+						await this.loadFoodsByCategory(firstCateId)
+					}
+					// 如果 home 传了 selectedCategory，优先切换到对应分类
+					await this.applySelectedCategoryFromStorage()
+					} catch (err) {
+						this.$showError(err, '分类加载失败', 1500)
+					}
+			},
+			// 获取右侧菜品
+			async loadFoodsByCategory(cateId) {
+				try {
+					const foods = await foodService.getFoodsByCategory(cateId)
+					this.cateLevel = foods || []
+				} catch (err) {
+					this.$showError(err, '菜品加载失败', 1500)
+				}
+			},
+			// 左侧切换
+			async activeChanged(i) {
 				this.active = i
-				//给cateLevel赋值
-				this.cateLevel = this.cateList[i].children
-				//重新让滚动条归0/1
+				const cateId = this.cateList[i].cate_id
+				await this.loadFoodsByCategory(cateId)
+				// 让右侧滚动条回到顶部
 				this.scrollTop = this.scrollTop === 0 ? 1 : 0
-				// 同步到全局变量
-				const app = getApp();
-				app.globalData.currentCategory = this.cateList[i].cate_name;
 			},
 			//跳转到菜品详细页面
-			gotoGoodsDetail(item) {
+			gotoGoodsDetail(food) {
 				uni.navigateTo({
-					url:'/subpkg/goods_detail/goods_detail?cid=' + item.cate_id
+					url: '/subpkg/goods_detail/goods_detail?id=' + food._id
 				})
 			},
 			//跳转到search页面
@@ -110,13 +125,14 @@
 	display: flex;
 }
 .left-srcoll-view {
-	width: 180px;
+	width: 200rpx; /* 改用 rpx */
+	flex-shrink: 0; /* 防止被压缩 */
 	
 	.left-scroll-view-item {
 		background-color: #f7f7f7;
-		line-height: 60px;
+		line-height: 100rpx;
 		text-align: center;
-		font-size: 15px;
+		font-size: 28rpx;
 		
 		&.active {
 			background-color: #FFFFFF;
@@ -125,8 +141,8 @@
 			&::before {
 				content: ' ';
 				display: block;
-				width: 3px;
-				height: 30px;
+				width: 6rpx;
+				height: 50rpx;
 				background-color: #c00000;
 				position: absolute;
 				top: 50%;
@@ -139,26 +155,30 @@
 .right-scroll-view {
 	display: flex;
 	flex-wrap: wrap;
+	padding: 20rpx; /* 整体内边距 */
+	justify-content: space-between; /* 两端对齐 */
 }
 .right-scroll-view-item {
-	width: 50%;
-	padding: 10px;
+	width: 48%; /* 每行两个，留2%间距 */
+	margin-bottom: 30rpx; /* 底部间距 */
 	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 }
 .item-image {
-  width: 150px;
-  height: 150px;	
-  object-fit: cover;
-  border-radius: 8px;
-  display: block;
+	width: 100%; /* 占满父容器 */
+	height: 240rpx; /* 固定高度 */
+	object-fit: cover;
+	border-radius: 12rpx;
+	display: block;
 }
 .item-text {
-  margin-top: 6px;
-  text-align: center;
-  font-size: 28rpx;
-  line-height: 1.3;
+	margin-top: 12rpx;
+	text-align: center;
+	font-size: 26rpx;
+	line-height: 1.3;
+	word-break: break-all;
+	width: 100%;
 }
 </style>

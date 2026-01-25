@@ -1,0 +1,12 @@
+{
+  "passwordSecret": "Jty970708Linna0725Jty970708Linna0725",
+  "tokenSecret": "Linna0725Jty070897Linna0725Jty070897",
+  "mp-weixin": {
+    "oauth": {
+      "weixin": {
+        "appid": "wxa1c3e9ced7cad832",
+        "appsecret": "5890df6d1509a373a3d516b95f508c7a"
+      }
+    }
+  }
+}

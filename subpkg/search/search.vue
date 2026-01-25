@@ -1,114 +1,127 @@
 <template>
-	<view>
-		<view class="search-box">
-			<uni-search-bar @input="input" :radius="100" cancelButton="none" v-model="kw"></uni-search-bar>
-		</view>
-		<!--搜索列表-->
-		<view class="sugg-list" v-if="searchResults.length !== 0">
-			<view class="sugg-item" v-for="(item, i) in searchResults" :key="i" @click="gotoDetail(item)">
-				<!--图片-->
-				<image :src="item.cate_jpg" class="item-image"></image>
-				<!--文本-->
-				<text class="item-text">{{item.cate_name}}</text>
-			</view>
-		</view>
-		<!--搜索历史-->
-		<view class="history-box" v-else>
-			<!--标题区域-->
-			<view class="history-title">
-				<text>搜索历史</text>
-				<uni-icons type="trash" size="19" @click="clean"></uni-icons>
-			</view>
-			<!--列表区域-->
-			<view class="history-list">
-				<uni-tag type="default" :text="item" v-for="(item, i) in histories" :key="i" @click="gotoHistoryList(item)"></uni-tag>
-			</view>
-		</view>
-	</view>
+  <view>
+    <view class="search-box">
+      <uni-search-bar v-model="kw" @input="onInput" :radius="100" cancelButton="none"/>
+    </view>
+
+    <!-- 搜索结果 -->
+    <view class="sugg-list" v-if="searchResults.length">
+      <view class="sugg-item" v-for="(item, i) in searchResults" :key="i" @click="gotoDetail(item)">
+        <image :src="getCover(item)" class="item-image" mode="aspectFill" />
+        <text class="item-text">{{ item.name }}</text>
+      </view>
+    </view>
+
+    <!-- 搜索历史 -->
+    <view class="history-box" v-else>
+      <view class="history-title">
+        <text>搜索历史</text>
+        <uni-icons type="trash" size="19" @click="clean" />
+      </view>
+      <view class="history-list">
+        <uni-tag type="default" :text="item" v-for="(item, i) in histories" :key="i" @click="gotoHistory(item)"/>
+      </view>
+    </view>
+  </view>
 </template>
 
 <script>
-	export default {
-		data() {
-			return {
-				timer: null,
-				kw: '',
-				searchResults: [],
-				allChildren: [],
-				historyList: []
-			};
-		},
-		onShow() {
-			this.historyList = JSON.parse(uni.getStorageSync('kw') || '[]')
-		},
-		created() {
-			this.loadData()
-		},
-		methods: {
-			//首次加载时只请求一次数据
-			loadData() {
-				uni.request({
-					url:'https://raw.githubusercontent.com/jiangty-hub/uniFenLei/main/FenLei.json',
-					method: 'GET',
-					success: (res) => {
-						//把所有 children 缓存起来
-						this.allChildren = res.data.message.flatMap(item => item.children)
-					},
-					fail: (err) => {
-						this.$showError(err, '数据加载失败', 1500)
-					}
-				})
-			},
-			//input输入事件的处理函数
-			input(e) {
-				//清除timer对应的延时器
-				clearTimeout(this.timer)
-				//500毫秒以内不触发输入事件
-				this.timer = setTimeout(() => {
-					this.kw = e
-					this.getSearchList()
-				}, 500)
-			},
-			getSearchList() {
-				//搜索关键词是否为null
-				if(this.kw.length === 0) {
-					this.searchResults = []
-					return
-				}
-				const kwLower = this.kw.toLowerCase()
-				this.searchResults = this.allChildren.filter(item =>
-						item.cate_name.toLowerCase().includes(kwLower)
-					)
-				this.saveSearchHistory()
-				},
-			gotoDetail(item) {
-				uni.navigateTo({
-					url:'/subpkg/goods_detail/goods_detail?cid=' + item.cate_id
-				})
-			},
-			saveSearchHistory() {
-				const set = new Set(this.historyList)
-				set.delete(this.kw)
-				set.add(this.kw)
-				this.historyList = Array.from(set)
-				//对搜索历史的数据进行持久化存储
-				uni.setStorageSync('kw', JSON.stringify(this.historyList))
-			},
-			clean() {
-				this.historyList = []
-				uni.setStorageSync('kw', '[]')
-			},
-			gotoHistoryList(item) {
-				this.kw = item
-				this.getSearchList()
-			}
-		},
-		computed: {
-			histories() {
-				return [...this.historyList].reverse()
-			}
-		}
-	}
+export default {
+  data() {
+    return {
+      timer: null,
+      kw: '',
+      searchResults: [],
+      historyList: [],
+      loading: false,
+      foodService: null
+    }
+  },
+
+  onShow() {
+    this.historyList = JSON.parse(uni.getStorageSync('kw') || '[]')
+  },
+
+  created() {
+    // ✅ 云对象实例
+    this.foodService = uniCloud.importObject('food-service')
+  },
+
+  methods: {
+    onInput(val) {
+      clearTimeout(this.timer)
+      this.timer = setTimeout(() => {
+        this.kw = val
+        this.search()
+      }, 400)
+    },
+
+    async search() {
+      const keyword = (this.kw || '').trim()
+      if (!keyword) {
+        this.searchResults = []
+        return
+      }
+
+      if (this.loading) return
+      this.loading = true
+
+      try {
+        // ✅ 直接调用云对象方法
+        const list = await this.foodService.searchFoods(keyword)
+        this.searchResults = Array.isArray(list) ? list : []
+        this.saveHistory(keyword)
+      } catch (e) {
+        console.error(e)
+        this.searchResults = []
+        uni.showToast({ title: '搜索失败', icon: 'none' })
+      } finally {
+        this.loading = false
+      }
+    },
+
+    gotoDetail(item) {
+      const id = item._id || item.foodId
+      if (!id) {
+        uni.showToast({ title: '缺少菜品ID', icon: 'none' })
+        return
+      }
+      uni.navigateTo({
+        url: '/subpkg/goods_detail/goods_detail?id=' + id
+      })
+    },
+
+    getCover(item) {
+      const v = item && item.cover_images
+      if (Array.isArray(v) && v.length) return v[0]
+      if (typeof v === 'string' && v) return v
+    },
+
+    saveHistory(keyword) {
+      const set = new Set(this.historyList)
+      set.delete(keyword)
+      set.add(keyword)
+      this.historyList = Array.from(set)
+      uni.setStorageSync('kw', JSON.stringify(this.historyList))
+    },
+
+    clean() {
+      this.historyList = []
+      uni.setStorageSync('kw', '[]')
+    },
+
+    gotoHistory(item) {
+      this.kw = item
+      this.search()
+    }
+  },
+
+  computed: {
+    histories() {
+      return [...this.historyList].reverse()
+    }
+  }
+}
 </script>
 
 <style lang="scss">
