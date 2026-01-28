@@ -20,6 +20,9 @@
 	  "style": {
 	    "navigationBarTitleText": "修改资料"
 	  }
+	},
+	{
+		"path": "pages/addDish/addDish"
 	}
 ],
 	"subPackages": [

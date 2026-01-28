@@ -251,7 +251,7 @@ export default {
     },
 
     goAddDish() {
-      uni.navigateTo({ url: '/pages/dish/add' })
+      uni.navigateTo({ url: '/pages/addDish/addDish?mode=add' })
     },
 
     goEditProfile() {

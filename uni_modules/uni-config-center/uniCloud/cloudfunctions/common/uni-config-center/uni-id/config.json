@@ -4,8 +4,8 @@
   "mp-weixin": {
     "oauth": {
       "weixin": {
-        "appid": "**********",
-        "appsecret": "**********"
+        "appid": "************",
+        "appsecret": "************"
       }
     }
   }
