@@ -44,8 +44,6 @@
 </template>
 
 <script>
-import { showRequestError } from '@/main.js'
-
 	export default {
 		data() {
 			return {
@@ -180,7 +178,7 @@ swiper {
 }
 .floor-img-big {
 	width: 303rpx;
-	height: 420rpx;   /* 你可以根据设计微调 */
+	height: 405rpx;   /* 你可以根据设计微调 */
 	border-radius: 16rpx;
 	object-fit: cover;
 }
