@@ -17,8 +17,5 @@
   "bugs": {
     "url": "https://github.com/jiangty-hub/xcx/issues"
   },
-  "homepage": "https://github.com/jiangty-hub/xcx#readme",
-  "dependencies": {
-    "@escook/request-miniprogram": "^0.2.1"
-  }
+  "homepage": "https://github.com/jiangty-hub/xcx#readme"
 }

@@ -1,7 +1,16 @@
 <template>
   <view class="page">
     <!-- 菜品轮播图 -->
-    <swiper class="dish-swiper" :indicator-dots="true" :autoplay="true" :interval="3000" :duration="1000" :circular="true" indicator-color="rgba(255, 255, 255, 0.5)" indicator-active-color="#ff6b35">
+    <swiper
+      class="dish-swiper"
+      :indicator-dots="true"
+      :autoplay="true"
+      :interval="3000"
+      :duration="1000"
+      :circular="true"
+      indicator-color="rgba(255, 255, 255, 0.5)"
+      indicator-active-color="#ff6b35"
+    >
       <swiper-item v-for="(item, i) in dishImages" :key="i">
         <image class="dish-images" :src="fixImg(item)" mode="aspectFill"></image>
       </swiper-item>
@@ -74,8 +83,8 @@
       </view>
     </view>
 
-    <!-- 底部操作按钮 -->
-    <view class="bottom-actions">
+    <!-- ✅ 底部操作按钮：只有有权限才显示 -->
+    <view class="bottom-actions" v-if="canManage">
       <view class="action-btn collect-btn" @click="onDelete">
         <text class="btn-icon">🗑️</text>
         <text class="btn-text">删除菜品</text>
@@ -96,7 +105,10 @@ export default {
     return {
       cid_info: {},
       foodId: '',
-      loading: false
+      loading: false,
+
+      // ✅ 权限
+      canManage: false
     }
   },
 
@@ -107,7 +119,9 @@ export default {
       return
     }
     this.foodId = id
+
     await this.getDishDetailById(id)
+    await this.refreshPermission()
   },
 
   // 编辑页保存后返回详情页：自动刷新当前菜品
@@ -117,14 +131,11 @@ export default {
       uni.removeStorageSync('needRefreshFoodDetail')
       await this.getDishDetailById(this.foodId)
     }
+    // ✅ 返回详情页时也刷新一下权限（避免刚登录/刚退出）
+    await this.refreshPermission()
   },
 
   computed: {
-    /**
-     * ✅ 改动点：
-     * - 现在后端 getFoodDetail 会返回 cover_urls（展示用临时链接数组）
-     * - 轮播优先：images -> cover_urls -> 兼容旧的 cover_images(http url) -> []
-     */
     dishImages() {
       const a = this.cid_info?.images
       if (Array.isArray(a) && a.length) return a
@@ -132,7 +143,6 @@ export default {
       const u = this.cid_info?.cover_urls
       if (Array.isArray(u) && u.length) return u
 
-      // 兼容旧数据：cover_images 里存的是 http(s) url
       const b = this.cid_info?.cover_images
       if (Array.isArray(b) && b.length) {
         const httpOnly = b.map(String).filter((x) => x.startsWith('http'))
@@ -144,6 +154,32 @@ export default {
   },
 
   methods: {
+    // ✅ 统一取 token：兼容不同项目里存 token 的 key
+    getToken() {
+      return (
+        uni.getStorageSync('uni_id_token') ||
+        uni.getStorageSync('uniIdToken') ||
+        uni.getStorageSync('token') ||
+        ''
+      )
+    },
+
+    // ✅ 刷新是否有“删除/修改”的权限
+    async refreshPermission() {
+      const token = this.getToken()
+      if (!token) {
+        this.canManage = false
+        return
+      }
+      try {
+        // 后端会校验：token 是否有效 + uid 是否在白名单
+        const ok = await foodService.canManage(token)
+        this.canManage = !!ok
+      } catch (e) {
+        this.canManage = false
+      }
+    },
+
     // 调云对象拿详情（后端已补 cover_urls）
     async getDishDetailById(id) {
       try {
@@ -158,7 +194,7 @@ export default {
       }
     },
 
-    // 修正图片 url（兼容旧 url；cover_urls 一般不需要修，但保留无害）
+    // 修正图片 url
     fixImg(url) {
       if (!url) return '/static/cover-default.png'
       let fixed = String(url).replace(/\s+/g, '')
@@ -173,6 +209,10 @@ export default {
     // 删除：删完回到分类页
     async onDelete() {
       if (!this.foodId) return
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限，请登录管理员账号', icon: 'none' })
+        return
+      }
 
       uni.showModal({
         title: '确认删除',
@@ -183,13 +223,13 @@ export default {
           if (!res.confirm) return
           try {
             uni.showLoading({ title: '删除中...' })
-            await foodService.deleteFood(this.foodId)
+
+            const token = this.getToken()
+            await foodService.deleteFood(this.foodId, token) // ✅ 传 token 给后端校验
             uni.hideLoading()
 
-            // 通知分类页刷新
             uni.setStorageSync('needRefreshFoods', 1)
 
-            // 回分类页：优先回退到栈内的分类页，否则重启到分类页
             const pages = getCurrentPages()
             const idx = pages.findIndex((p) => p.route === 'pages/category/category')
             if (idx !== -1) {
@@ -207,9 +247,13 @@ export default {
       })
     },
 
-    // 修改：去编辑页（新增页）
+    // 修改：去编辑页
     onEdit() {
       if (!this.foodId) return
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限，请登录管理员账号', icon: 'none' })
+        return
+      }
       uni.navigateTo({
         url: `/pages/addDish/addDish?mode=edit&id=${this.foodId}`
       })

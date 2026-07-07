@@ -28,14 +28,14 @@
 				<view class="floor-img-box">
 					<!--左侧大图片盒子-->
 					<view class="left-img-box">
-						<image :src="item[0].image_src" class="floor-img-big"></image>
+						<image :src="getFloorImage(item, 0)" class="floor-img-big" mode="aspectFill"></image>
 					</view>
 					<!--右侧小图片盒子-->
 					<view class="right-img-box">
-						<image :src="item[1].image_src" class="floor-img-small"></image>
-						<image :src="item[2].image_src" class="floor-img-small"></image>
-						<image :src="item[3].image_src" class="floor-img-small"></image>
-						<image :src="item[4].image_src" class="floor-img-small"></image>
+						<image :src="getFloorImage(item, 1)" class="floor-img-small" mode="aspectFill"></image>
+						<image :src="getFloorImage(item, 2)" class="floor-img-small" mode="aspectFill"></image>
+						<image :src="getFloorImage(item, 3)" class="floor-img-small" mode="aspectFill"></image>
+						<image :src="getFloorImage(item, 4)" class="floor-img-small" mode="aspectFill"></image>
 					</view>
 				</view>
 			</view>
@@ -87,12 +87,19 @@
 		    uniCloud.callFunction({
 		      name: 'getFloor',
 		      success: (res) => {
-		  		this.floorList = res.result.data
+		  		this.floorList = Array.isArray(res.result?.data) ? res.result.data : []
 		      },
 		      fail: (err) => {
 		        this.$showError(err, '图片加载失败', 1500)
 		      }
 		    })
+		  },
+		  getFloorImage(group, index) {
+		  	const defaultImg = '/static/cover-default.png'
+		  	if (!Array.isArray(group)) return defaultImg
+		  	const item = group[index]
+		  	if (!item || !item.image_src) return defaultImg
+		  	return item.image_src
 		  },
 		  nacClickHandler(item) {
 		  	//把参数存储到本地

@@ -1,0 +1,9 @@
+{
+  "triggers": [
+    {
+      "name": "clean_uniid_log_weekly",
+      "type": "timer",
+      "config": "0 0 3 ? * MON *"
+    }
+  ]
+}

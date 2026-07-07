@@ -1,9 +1,17 @@
 <template>
   <view class="page">
     <view v-if="!hasLogin">
-		<notlogin @login="weixinLogin" />
-	</view>
-    <loggedin v-else :nickname="nickname" :avatar="avatar" @goAddDish="goAddDish" @logout="logout" @editProfile="goEditProfile"/>
+      <notlogin @login="weixinLogin" />
+    </view>
+
+    <loggedin
+      v-else
+      :nickname="nickname"
+      :avatar="avatar"
+      @goAddDish="goAddDish"
+      @logout="logout"
+      @editProfile="goEditProfile"
+    />
   </view>
 </template>
 
@@ -13,31 +21,54 @@ import loggedin from '@/components/loggedin.vue'
 
 export default {
   components: { notlogin, loggedin },
+
   data() {
     return {
       hasLogin: false,
       nickname: '',
-      avatar: '', // 展示用 URL（tempFileURL 或 qlogo URL）
+      avatar: '', // 展示用 URL（tempFileURL 或 http(s)）
       uid: ''
     }
   },
+
   onShow() {
     this.refresh()
   },
+
   methods: {
-    // 把可能是 fileID 的 avatar 转成可展示的 URL
+    // ======= 基础工具：清理登录态 =======
+    clearLoginState() {
+      this.hasLogin = false
+      this.nickname = ''
+      this.avatar = ''
+      this.uid = ''
+
+      uni.removeStorageSync('uni_id_token')
+      uni.removeStorageSync('uni_id_uid')
+      uni.removeStorageSync('uni_id_nickname')
+      uni.removeStorageSync('uni_id_avatar')
+    },
+
+    // ======= 基础工具：判断是否为“登录失效类”错误 =======
+    isAuthExpiredResult(r) {
+      const code = r?.code
+      const msg = String(r?.msg || '')
+      // ✅ 最干净：优先认 401
+      if (code === 401) return true
+      // ✅ 兜底：一些项目会返回其他 code 或 msg
+      if (/token|未登录|登录|失效|过期|unauth|auth/i.test(msg)) return true
+      return false
+    },
+
+    // ======= 基础工具：把可能是 fileID 的 avatar 转成可展示 URL =======
     async resolveAvatarToUrl(avatarValue) {
       if (!avatarValue) return ''
 
-      // 如果已经是 http(s) URL（例如微信 qlogo），直接返回
       if (/^https?:\/\//i.test(avatarValue)) return avatarValue
 
-      // 如果是云存储 fileID（cloud://...），转 temp url
       if (/^cloud:\/\//i.test(avatarValue)) {
         try {
-          const tmp = await uniCloud.getTempFileURL({
-            fileList: [avatarValue]
-          })
+          const tmp = await uniCloud.getTempFileURL({ fileList: [avatarValue] })
           return tmp.fileList?.[0]?.tempFileURL || ''
         } catch (e) {
           console.log('getTempFileURL failed:', e)
@@ -45,66 +76,87 @@ export default {
         }
       }
 
-      // 其他未知格式：不展示
       return ''
     },
 
+    // ======= 刷新：先缓存秒开，再云端校验 token + 拉最新资料 =======
     async refresh() {
       const token = uni.getStorageSync('uni_id_token')
-      this.hasLogin = !!token
 
-      // 未登录：清空显示
-      if (!this.hasLogin) {
-        this.nickname = ''
-        this.avatar = ''
-        this.uid = ''
+      // 0) 没 token：直接未登录
+      if (!token) {
+        this.clearLoginState()
         return
       }
 
-      // ① 已登录：先用缓存秒开
+      // 1) 有 token：先用缓存秒开（不闪）
+      this.hasLogin = true
       this.nickname = uni.getStorageSync('uni_id_nickname') || ''
       this.avatar = uni.getStorageSync('uni_id_avatar') || ''
       this.uid = uni.getStorageSync('uni_id_uid') || ''
 
-      // ② 再从云端拉取一次，保证跨设备/更新后也正确
+      // 2) 云端校验 + 拉取（关键：解决“假登录”）
       try {
         const res = await uniCloud.callFunction({
           name: 'get-user-profile',
           data: { token }
         })
         const r = res.result || {}
-        if (r.code !== 0) throw new Error(r.msg || '获取用户信息失败')
+
+        // token 失效：清理并回到未登录
+        if (this.isAuthExpiredResult(r)) {
+          this.clearLoginState()
+          return
+        }
+
+        // 其他错误：不踢下线（减少误判），继续用缓存兜底
+        if (r.code !== 0) {
+          console.log('get-user-profile failed:', r)
+          if (!this.nickname) this.nickname = '用户'
+          return
+        }
 
         const profile = r.profile || {}
 
+        // uid
         this.uid = r.uid || this.uid
-        this.nickname = profile.nickname || this.nickname || ''
 
-        // profile.avatar 可能是 fileID 或 URL
-        const avatarUrl = await this.resolveAvatarToUrl(profile.avatar || '')
-        if (avatarUrl) this.avatar = avatarUrl
+        // nickname：云端优先
+        const cloudNickname = (profile.nickname || '').trim()
+        if (cloudNickname) this.nickname = cloudNickname
 
-        // 写缓存（注意：avatar 缓存的是可展示 URL）
+        // avatar：可能是 URL 或 fileID
+        const cloudAvatar = profile.avatar || ''
+        const avatarUrl = await this.resolveAvatarToUrl(cloudAvatar)
+
+        if (avatarUrl) {
+          this.avatar = avatarUrl
+        } else if (!cloudAvatar) {
+          // 云端明确为空：清空展示
+          this.avatar = ''
+        }
+        // 若 cloudAvatar 有值但转 URL 失败：不覆盖本地缓存，减少误判
+
+        // 写缓存（头像缓存可展示 URL）
         uni.setStorageSync('uni_id_uid', this.uid)
-        uni.setStorageSync('uni_id_nickname', this.nickname)
-        uni.setStorageSync('uni_id_avatar', this.avatar)
+        uni.setStorageSync('uni_id_nickname', this.nickname || '')
+        if (this.avatar) uni.setStorageSync('uni_id_avatar', this.avatar)
+        else uni.removeStorageSync('uni_id_avatar')
       } catch (e) {
-        console.log('refresh profile failed:', e)
+        // 网络/服务抖动：不踢下线，继续用缓存
+        console.log('refresh error:', e)
       }
 
-      // 兜底
       if (!this.nickname) this.nickname = '用户'
     },
 
-    // 微信登录（mp-weixin）
+    // ======= 微信登录（mp-weixin） =======
     async weixinLogin() {
-      let profile = null
-
       try {
         uni.showLoading({ title: '登录中...' })
 
-        // 0) 必须在用户点击链路内：拿头像等信息（昵称可能被降级成“微信用户”）
-        profile = await new Promise((resolve, reject) => {
+        // 0) 获取微信用户信息（在点击链路里）
+        const profile = await new Promise((resolve, reject) => {
           uni.getUserProfile({
             desc: '用于完善用户资料',
             success: resolve,
@@ -116,10 +168,9 @@ export default {
         let nickName = ui.nickName || ui.nickname || ''
         const avatarUrlFromWx = ui.avatarUrl || ui.avatar || ''
 
-        // 微信降级昵称时会是“微信用户”，不要写入你的昵称字段
         if (nickName === '微信用户') nickName = ''
 
-        // 1) 获取微信 code
+        // 1) 获取 code
         const loginRes = await new Promise((resolve, reject) => {
           uni.login({
             provider: 'weixin',
@@ -138,48 +189,42 @@ export default {
         })
 
         const result = res.result || {}
-        console.log('uni-id-cf result:', JSON.stringify(result, null, 2))
         if (result.code !== 0) throw new Error(result.msg || '登录失败')
 
         // 3) 保存 token/uid
         if (result.token) uni.setStorageSync('uni_id_token', result.token)
         if (result.uid) uni.setStorageSync('uni_id_uid', result.uid)
 
-        // 4) 登录时：先把“微信头像 URL”作为展示用头像缓存（让用户立刻看到头像）
+        // 4) 先用微信头像作为展示缓存（秒出效果）
         if (avatarUrlFromWx) {
           this.avatar = avatarUrlFromWx
           uni.setStorageSync('uni_id_avatar', avatarUrlFromWx)
         }
 
-        // 5) 只有【云端还没有 nickname】时才弹设置昵称
-		let cloudNickname = ''
+        // 5) 云端是否已有 nickname？
+        let cloudNickname = ''
         try {
           const pRes = await uniCloud.callFunction({
             name: 'get-user-profile',
             data: { token: result.token }
           })
           const pr = pRes.result || {}
-          if (pr.code === 0) {
-            cloudNickname = pr.profile?.nickname || ''
-          }
+          if (pr.code === 0) cloudNickname = pr.profile?.nickname || ''
         } catch (e) {
           console.log('get-user-profile in login failed:', e)
         }
-        
-        // A) 云端已有昵称：直接用它，不弹窗
+
         if (cloudNickname) {
           uni.setStorageSync('uni_id_nickname', cloudNickname)
-        }
-        // B) 云端没昵称：如果拿到了“真实微信昵称”（很少），用它初始化
-        else if (nickName) {
-          await uniCloud.callFunction({
+        } else if (nickName) {
+          // 初始化昵称（云端没昵称时）
+          const uRes = await uniCloud.callFunction({
             name: 'update-user-profile',
             data: { token: result.token, nickname: nickName }
           })
-          uni.setStorageSync('uni_id_nickname', nickName)
-        }
-        // C) 云端没昵称 + 微信也没给：这才弹一次让用户设置
-        else {
+          const ur = uRes.result || {}
+          if (ur.code === 0) uni.setStorageSync('uni_id_nickname', nickName)
+        } else {
           await this.promptSetNickname(result.token)
         }
 
@@ -231,6 +276,7 @@ export default {
       })
     },
 
+    // ======= 退出登录 =======
     async logout() {
       try {
         await uniCloud.callFunction({
@@ -241,21 +287,25 @@ export default {
         console.error(e)
       }
 
-      uni.removeStorageSync('uni_id_token')
-      uni.removeStorageSync('uni_id_uid')
-      uni.removeStorageSync('uni_id_nickname')
-      uni.removeStorageSync('uni_id_avatar')
-
-      await this.refresh()
+      this.clearLoginState()
       uni.showToast({ title: '已退出', icon: 'none' })
     },
 
+    // ======= 页面跳转 =======
     goAddDish() {
       uni.navigateTo({ url: '/pages/addDish/addDish?mode=add' })
     },
 
+    // ✅ eventChannel：edit 保存后通知我刷新
     goEditProfile() {
-      uni.navigateTo({ url: '/pages/profile/edit' })
+      uni.navigateTo({
+        url: '/pages/profile/edit',
+        success: (res) => {
+          res.eventChannel.on('profileUpdated', () => {
+            this.refresh()
+          })
+        }
+      })
     }
   }
 }

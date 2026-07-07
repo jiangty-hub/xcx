@@ -62,10 +62,18 @@
         </view>
 
         <view class="row">
-          <view class="btn small btn-add" :class="{ disabled: uploading }" @click="chooseAndUploadCover('album')">
+          <view
+            class="btn small btn-add"
+            :class="{ disabled: uploading || !canManage }"
+            @click="chooseAndUploadCover('album')"
+          >
             {{ uploading ? '上传中...' : '从相册选择' }}
           </view>
-          <view class="btn small btn-add" :class="{ disabled: uploading }" @click="chooseAndUploadCover('camera')">
+          <view
+            class="btn small btn-add"
+            :class="{ disabled: uploading || !canManage }"
+            @click="chooseAndUploadCover('camera')"
+          >
             {{ uploading ? '上传中...' : '拍照上传' }}
           </view>
         </view>
@@ -73,6 +81,10 @@
         <view class="row" v-if="uploading">
           <text class="label">上传进度</text>
           <text class="placeholder">{{ uploadProgress }}%</text>
+        </view>
+
+        <view class="row" v-if="!canManage">
+          <text class="placeholder">登录管理员账号后才可上传/编辑</text>
         </view>
       </view>
 
@@ -82,7 +94,7 @@
 
         <view class="row split">
           <input class="input grow" v-model="tagInput" placeholder="例如：下饭/好吃" />
-          <view class="btn small btn-add shrink" @click="addTag">添加</view>
+          <view class="btn small btn-add shrink" :class="{ disabled: !canManage }" @click="addTag">添加</view>
         </view>
 
         <view class="chips" v-if="form.tags.length">
@@ -99,7 +111,7 @@
 
         <view class="row split">
           <input class="input grow" v-model="ingInput" placeholder="例如：肥牛/猪肉" />
-          <view class="btn small btn-add shrink" @click="addIngredient">添加</view>
+          <view class="btn small btn-add shrink" :class="{ disabled: !canManage }" @click="addIngredient">添加</view>
         </view>
 
         <view class="list" v-if="form.ingredients.length">
@@ -116,7 +128,7 @@
 
         <view class="row split">
           <input class="input grow" v-model="stepInput" placeholder="例如：猪肉焯水..." />
-          <view class="btn small btn-add shrink" @click="addStep">添加</view>
+          <view class="btn small btn-add shrink" :class="{ disabled: !canManage }" @click="addStep">添加</view>
         </view>
 
         <view class="list" v-if="form.steps.length">
@@ -131,7 +143,7 @@
     <!-- ✅ 底部按钮：固定 -->
     <view class="bottom">
       <view class="btn ghost" @click="onCancel">取消</view>
-      <view class="btn primary" :class="{ disabled: submitting || uploading }" @click="onSubmit">
+      <view class="btn primary" :class="{ disabled: submitting || uploading || !canManage }" @click="onSubmit">
         {{ submitting ? '提交中...' : (mode === 'edit' ? '保存修改' : '发布菜品') }}
       </view>
     </view>
@@ -150,16 +162,19 @@ export default {
       cateList: [],
       cateIndex: -1,
 
+      // ✅ 权限
+      canManage: false,
+
       // 图片：数据库存 fileID；页面展示用临时 URL 缓存
       coverUrlMap: {},
       uploading: false,
       uploadProgress: 0,
-	  uploadTimer: null,
-	  hasRealTotal: false,
-	  
-	  backLock: false,
+      uploadTimer: null,
+      hasRealTotal: false,
 
-      // 关键：loading 计数器
+      backLock: false,
+
+      // loading 计数器
       loadingCount: 0,
 
       form: {
@@ -192,6 +207,9 @@ export default {
 
     await this.loadCategories()
 
+    // ✅ 先判断权限（没权限也可以看页面，但不能提交/上传）
+    await this.refreshPermission()
+
     if (this.mode === 'edit') {
       if (!this.foodId) {
         uni.showToast({ title: '缺少菜品id', icon: 'none' })
@@ -218,9 +236,9 @@ export default {
   },
 
   onBackPress() {
-	if (this.backLock) return true
+    if (this.backLock) return true
     if (this.isDirty()) {
-	  this.backLock = true
+      this.backLock = true
       uni.showModal({
         title: '提示',
         content: '内容尚未保存，确定要离开吗？',
@@ -231,8 +249,10 @@ export default {
           } else {
             this.backLock = false
           }
-		},
-		fail: () => {this.backLock = false}
+        },
+        fail: () => {
+          this.backLock = false
+        }
       })
       return true
     }
@@ -240,6 +260,31 @@ export default {
   },
 
   methods: {
+    // ✅ 统一取 token：兼容不同项目里存 token 的 key
+    getToken() {
+      return (
+        uni.getStorageSync('uni_id_token') ||
+        uni.getStorageSync('uniIdToken') ||
+        uni.getStorageSync('token') ||
+        ''
+      )
+    },
+
+    // ✅ 校验权限（token 有效且 uid 在管理员白名单）
+    async refreshPermission() {
+      const token = this.getToken()
+      if (!token) {
+        this.canManage = false
+        return
+      }
+      try {
+        const ok = await foodService.canManage(token)
+        this.canManage = !!ok
+      } catch (e) {
+        this.canManage = false
+      }
+    },
+
     // ✅ showLoading 包装：计数 + try/catch
     safeShowLoading(title = '加载中...') {
       this.loadingCount = (this.loadingCount || 0) + 1
@@ -258,15 +303,16 @@ export default {
       } else {
         this.loadingCount = 0
       }
-	this.$nextTick(() => {
-		setTimeout(() => {
-			try {
-				const r = uni.hideLoading()
-				if (r && typeof r.catch === 'function') r.catch(() => {})
-				} catch (e) {}
-			}, 16)
-		  })
-		},
+
+      this.$nextTick(() => {
+        setTimeout(() => {
+          try {
+            const r = uni.hideLoading()
+            if (r && typeof r.catch === 'function') r.catch(() => {})
+          } catch (e) {}
+        }, 16)
+      })
+    },
 
     async loadCategories() {
       try {
@@ -301,7 +347,7 @@ export default {
         }
       } catch (e) {
         uni.showToast({ title: e?.message || '加载失败', icon: 'none' })
-        this.safeHideLoading(true) // ✅ 先强制关
+        this.safeHideLoading(true)
         setTimeout(() => uni.navigateBack(), 150)
       } finally {
         this.safeHideLoading()
@@ -310,7 +356,7 @@ export default {
 
     syncCateIndexByForm() {
       const cid = String(this.form.categoryId ?? '')
-      const idx = this.cateList.findIndex(c => String(c.cate_id) === cid)
+      const idx = this.cateList.findIndex((c) => String(c.cate_id) === cid)
       this.cateIndex = idx
     },
 
@@ -333,249 +379,256 @@ export default {
     coverSrc(v) {
       if (!v) return '/static/cover-default.png'
       const s = String(v).trim()
-    
-      // 1) 直接可用的网络图
+
       if (s.startsWith('http')) return this.fixImg(s)
-    
-      // 2) 本地临时路径（刚选择的图片可能是这些）
       if (s.startsWith('wxfile://') || s.startsWith('file://')) return s
-    
-      // 3) 云文件 fileID / cloud:// ：走缓存（hydrateCoverUrls 或上传后 getTempFileURL）
+
       return this.coverUrlMap[s] || '/static/cover-default.png'
     },
 
     async hydrateCoverUrls() {
-      const list = (this.form.cover_images || [])
-        .filter(x => typeof x === 'string' && x.length)
-    
+      const list = (this.form.cover_images || []).filter((x) => typeof x === 'string' && x.length)
       if (!list.length) return
-    
-      // 只处理：既不是 http，也不是本地路径的（cloud:// / fileID）
-      const ids = list.filter(s => {
+
+      const ids = list.filter((s) => {
         s = String(s)
         return !s.startsWith('http') && !s.startsWith('wxfile://') && !s.startsWith('file://')
       })
-    
       if (!ids.length) return
-    
+
       try {
         const res = await uniCloud.getTempFileURL({ fileList: ids })
-        ;(res.fileList || []).forEach(it => {
-          if (it.fileID && it.tempFileURL) this.$set(this.coverUrlMap, it.fileID, it.tempFileURL)
+        ;(res.fileList || []).forEach((it) => {
+          if (it.fileID && it.tempFileURL) this.coverUrlMap[it.fileID] = it.tempFileURL
         })
       } catch (e) {
         console.error('hydrateCoverUrls failed:', e)
       }
     },
 
-	async chooseAndUploadCover(source = 'album') {
-	  if (this.uploading) return
-	
-	  try {
-	    const isWeixinMP = process.env.UNI_PLATFORM === 'mp-weixin'
-	    let tempPaths = []
-	
-	    // 1) 拿到本地临时路径（保证是 string[]）
-	    if (isWeixinMP && typeof uni.chooseMedia === 'function') {
-	      const res = await uni.chooseMedia({
-	        count: 9,
-	        mediaType: ['image'],
-	        sizeType: ['compressed'],
-	        sourceType: [source]
-	      })
-	
-	      // chooseMedia 结构：tempFiles: [{ tempFilePath }]
-	      tempPaths = (res?.tempFiles || [])
-	        .map(x => this.asPath(x?.tempFilePath) || this.asPath(x?.filePath) || this.asPath(x?.path))
-	        .filter(p => typeof p === 'string' && p.length)
-	    } else {
-	      const res = await uni.chooseImage({
-	        count: 9,
-	        sizeType: ['compressed'],
-	        sourceType: [source]
-	      })
-	
-	      // ✅ 最稳定：tempFilePaths 一定是 string[]
-	      tempPaths = (res?.tempFilePaths || [])
-	        .filter(p => typeof p === 'string' && p.length)
-	
-	      // 兜底：某些端 tempFiles 才有
-	      if (!tempPaths.length) {
-	        tempPaths = (res?.tempFiles || [])
-	          .map(x => this.asPath(x?.path) || this.asPath(x?.tempFilePath))
-	          .filter(p => typeof p === 'string' && p.length)
-	      }
-	    }
-	    if (!tempPaths.length) {
-	      uni.showToast({ title: '未获取到图片路径', icon: 'none' })
-	      return
-	    }
-	    this.uploading = true
-	    this.uploadProgress = 0
-	    this.startFakeProgress()
-		const totalCount = tempPaths.length
-	
-	    // 2) 逐个上传
-	    for (let i = 0; i < tempPaths.length; i++) {
-	      const filePath = tempPaths[i]
-	
-	      // ✅ 关键：filePath 必须是 string
-	      if (typeof filePath !== 'string' || !filePath) {
-	        console.error('[upload] invalid filePath:', filePath, tempPaths)
-	        uni.showToast({ title: '图片路径异常（非字符串）', icon: 'none' })
-	        continue
-	      }
-	
-	      const ext = (filePath.split('.').pop() || 'jpg').toLowerCase()
-	      const cloudPath = `foods/${Date.now()}_${Math.random().toString(16).slice(2)}.${ext}`
-	
-	      const up = await uniCloud.uploadFile({
-	        filePath,
-	        cloudPath,
-	        onUploadProgress: (p) => {
-	          const total = Number(p?.totalBytesExpectedToSend || 0)
-	          const sent = Number(p?.totalBytesSent || 0)
-	          if (total > 0) {
-	            this.hasRealTotal = true
-				const percent = Math.floor((sent / total) * 100)
-				this.uploadProgress = Math.max(1, Math.min(99, percent))
-	          }
-	        }
-	      })
-	
-	      const fileID = this.pickFileID(up)
-	
-	      // ✅ 关键：fileID 必须是 string，否则不要进入 getTempFileURL（否则继续 e3.split）
-	      if (typeof fileID !== 'string' || !fileID) {
-	        console.error('[upload] invalid fileID from uploadFile:', up)
-	        uni.showToast({ title: '上传返回 fileID 异常', icon: 'none' })
-	        continue
-	      }
-	
-	      // 入库保存 fileID
-	      this.form.cover_images.push(fileID)
-	
-	      // 3) 回显临时链接（只在 fileID 合法时调用）
-	      try {
-	        const tmp = await uniCloud.getTempFileURL({
-	            fileList: [fileID] // ✅ 只传字符串数组
-	        })
-	        const url = tmp?.fileList?.[0]?.tempFileURL
-	          if (typeof url === 'string' && url) {
-	            this.$set(this.coverUrlMap, fileID, url)
-	          }
-	        } catch (e) {
-	          console.error('getTempFileURL failed:', e)
-	        }
-	
-	      const doneCount = i + 1
-		  this.uploadProgress = Math.min(99,Math.floor((doneCount / totalCount) * 100))
-	    }
-		this.finishProgressAndHide()
-	  } catch (e) {
-	    uni.showToast({ title: e?.message || '选择/上传失败', icon: 'none' })
-	  } finally {
-		this.stopFakeProgress()
-		this.hasRealTotal = false
-	  }
-	},
-	
-	startFakeProgress() {
-	  this.stopFakeProgress()
-	  this.hasRealTotal = false
-	
-	  // 从 1% 开始更“像在动”
-	  if (this.uploadProgress <= 0) this.uploadProgress = 1
-	
-	  this.uploadTimer = setInterval(() => {
-	    // 只在“没有真实 total”时模拟
-	    if (this.hasRealTotal) return
-	
-	    // 缓慢涨到 95%，留 5% 给完成时跳 100
-	    if (this.uploadProgress < 95) {
-	      // 越往后越慢
-	      const step = this.uploadProgress < 30 ? 3 : this.uploadProgress < 60 ? 2 : 1
-	      this.uploadProgress = Math.min(95, this.uploadProgress + step)
-	    }
-	  }, 200)
-	},
-	
-	stopFakeProgress() {
-	  if (this.uploadTimer) {
-	    clearInterval(this.uploadTimer)
-	    this.uploadTimer = null
-	  }
-	},
-	
-	finishProgressAndHide() {
-	  // 结束时统一收尾：先到 100，再稍等一下再归零/隐藏
-	  this.uploadProgress = 100
-	  this.stopFakeProgress()
-	
-	  setTimeout(() => {
-	    this.uploading = false
-	    this.uploadProgress = 0
-	    this.hasRealTotal = false
-	  }, 350)
-	},
-	
-	asPath(v) {
-	  if (typeof v === 'string') return v
-	  return ''
-	},
-	
-	// 从 uploadFile 返回里“强行提取 string 类型 fileID”，提不到就返回 ''
-	pickFileID(up) {
-	  // 常见：{ fileID: 'cloud://xxx' }
-	  if (typeof up?.fileID === 'string') return up.fileID
-	
-	  // 少数情况：{ fileId: '...' }
-	  if (typeof up?.fileId === 'string') return up.fileId
-	
-	  // 极少数：fileID 是数组
-	  if (Array.isArray(up?.fileID) && typeof up.fileID[0] === 'string') return up.fileID[0]
-	
-	  return ''
-	},
+    async chooseAndUploadCover(source = 'album') {
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
+        return
+      }
+      if (this.uploading) return
+
+      let uploadFinished = false
+
+      try {
+        const isWeixinMP = process.env.UNI_PLATFORM === 'mp-weixin'
+        let tempPaths = []
+
+        if (isWeixinMP && typeof uni.chooseMedia === 'function') {
+          const res = await uni.chooseMedia({
+            count: 9,
+            mediaType: ['image'],
+            sizeType: ['compressed'],
+            sourceType: [source]
+          })
+
+          tempPaths = (res?.tempFiles || [])
+            .map((x) => this.asPath(x?.tempFilePath) || this.asPath(x?.filePath) || this.asPath(x?.path))
+            .filter((p) => typeof p === 'string' && p.length)
+        } else {
+          const res = await uni.chooseImage({
+            count: 9,
+            sizeType: ['compressed'],
+            sourceType: [source]
+          })
+
+          tempPaths = (res?.tempFilePaths || []).filter((p) => typeof p === 'string' && p.length)
+
+          if (!tempPaths.length) {
+            tempPaths = (res?.tempFiles || [])
+              .map((x) => this.asPath(x?.path) || this.asPath(x?.tempFilePath))
+              .filter((p) => typeof p === 'string' && p.length)
+          }
+        }
+
+        if (!tempPaths.length) {
+          uni.showToast({ title: '未获取到图片路径', icon: 'none' })
+          return
+        }
+
+        this.uploading = true
+        this.uploadProgress = 0
+        this.startFakeProgress()
+        const totalCount = tempPaths.length
+
+        for (let i = 0; i < tempPaths.length; i++) {
+          const filePath = tempPaths[i]
+
+          if (typeof filePath !== 'string' || !filePath) {
+            console.error('[upload] invalid filePath:', filePath, tempPaths)
+            uni.showToast({ title: '图片路径异常（非字符串）', icon: 'none' })
+            continue
+          }
+
+          const ext = (filePath.split('.').pop() || 'jpg').toLowerCase()
+          const cloudPath = `foods/${Date.now()}_${Math.random().toString(16).slice(2)}.${ext}`
+
+          const up = await uniCloud.uploadFile({
+            filePath,
+            cloudPath,
+            onUploadProgress: (p) => {
+              const total = Number(p?.totalBytesExpectedToSend || 0)
+              const sent = Number(p?.totalBytesSent || 0)
+              if (total > 0) {
+                this.hasRealTotal = true
+                const percent = Math.floor((sent / total) * 100)
+                this.uploadProgress = Math.max(1, Math.min(99, percent))
+              }
+            }
+          })
+
+          const fileID = this.pickFileID(up)
+          if (typeof fileID !== 'string' || !fileID) {
+            console.error('[upload] invalid fileID from uploadFile:', up)
+            uni.showToast({ title: '上传返回 fileID 异常', icon: 'none' })
+            continue
+          }
+
+          this.form.cover_images.push(fileID)
+
+          try {
+            const tmp = await uniCloud.getTempFileURL({ fileList: [fileID] })
+            const url = tmp?.fileList?.[0]?.tempFileURL
+            if (typeof url === 'string' && url) {
+              this.coverUrlMap[fileID] = url
+            }
+          } catch (e) {
+            console.error('getTempFileURL failed:', e)
+          }
+
+          const doneCount = i + 1
+          this.uploadProgress = Math.min(99, Math.floor((doneCount / totalCount) * 100))
+        }
+
+        this.finishProgressAndHide()
+        uploadFinished = true
+      } catch (e) {
+        uni.showToast({ title: e?.message || '选择/上传失败', icon: 'none' })
+      } finally {
+        this.stopFakeProgress()
+        this.hasRealTotal = false
+        if (!uploadFinished) {
+          this.uploading = false
+          this.uploadProgress = 0
+        }
+      }
+    },
+
+    startFakeProgress() {
+      this.stopFakeProgress()
+      this.hasRealTotal = false
+      if (this.uploadProgress <= 0) this.uploadProgress = 1
+
+      this.uploadTimer = setInterval(() => {
+        if (this.hasRealTotal) return
+        if (this.uploadProgress < 95) {
+          const step = this.uploadProgress < 30 ? 3 : this.uploadProgress < 60 ? 2 : 1
+          this.uploadProgress = Math.min(95, this.uploadProgress + step)
+        }
+      }, 200)
+    },
+
+    stopFakeProgress() {
+      if (this.uploadTimer) {
+        clearInterval(this.uploadTimer)
+        this.uploadTimer = null
+      }
+    },
+
+    finishProgressAndHide() {
+      this.uploadProgress = 100
+      this.stopFakeProgress()
+
+      setTimeout(() => {
+        this.uploading = false
+        this.uploadProgress = 0
+        this.hasRealTotal = false
+      }, 350)
+    },
+
+    asPath(v) {
+      if (typeof v === 'string') return v
+      return ''
+    },
+
+    pickFileID(up) {
+      if (typeof up?.fileID === 'string') return up.fileID
+      if (typeof up?.fileId === 'string') return up.fileId
+      if (Array.isArray(up?.fileID) && typeof up.fileID[0] === 'string') return up.fileID[0]
+      return ''
+    },
 
     removeCover(i) {
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
+        return
+      }
       const fid = this.form.cover_images[i]
       this.form.cover_images.splice(i, 1)
-      if (fid && this.coverUrlMap[fid]) this.$delete(this.coverUrlMap, fid)
+      if (fid && this.coverUrlMap[fid]) delete this.coverUrlMap[fid]
     },
 
     addTag() {
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
+        return
+      }
       const t = (this.tagInput || '').trim()
       if (!t) return
       if (!this.form.tags.includes(t)) {
-          this.form.tags.push(t)
-          uni.hideKeyboard()
-        }
+        this.form.tags.push(t)
+        uni.hideKeyboard()
+      }
       this.tagInput = ''
     },
     removeTag(i) {
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
+        return
+      }
       this.form.tags.splice(i, 1)
     },
 
     addIngredient() {
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
+        return
+      }
       const t = (this.ingInput || '').trim()
       if (!t) return
       this.form.ingredients.push(t)
       this.ingInput = ''
-	  uni.hideKeyboard()
+      uni.hideKeyboard()
     },
     removeIngredient(i) {
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
+        return
+      }
       this.form.ingredients.splice(i, 1)
     },
 
     addStep() {
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
+        return
+      }
       const t = (this.stepInput || '').trim()
       if (!t) return
       this.form.steps.push(t)
       this.stepInput = ''
-	  uni.hideKeyboard()
+      uni.hideKeyboard()
     },
     removeStep(i) {
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
+        return
+      }
       this.form.steps.splice(i, 1)
     },
 
@@ -596,9 +649,9 @@ export default {
       return {
         foodId: f.foodId,
         name: (f.name || '').trim(),
-        categoryId: (f.categoryId === 0 || f.categoryId === '0')? '0': String(f.categoryId ?? ''),
+        categoryId: f.categoryId === 0 || f.categoryId === '0' ? '0' : String(f.categoryId ?? ''),
         categoryName: (f.categoryName || '').trim(),
-        cover_images: Array.isArray(f.cover_images) ? f.cover_images.filter(x => typeof x === 'string' && x.trim()) : [],
+        cover_images: Array.isArray(f.cover_images) ? f.cover_images.filter((x) => typeof x === 'string' && x.trim()) : [],
         price: Number(f.price) || 0,
         tags: Array.isArray(f.tags) ? f.tags.filter(Boolean) : [],
         flavor: (f.flavor || '').trim(),
@@ -614,8 +667,25 @@ export default {
       return JSON.stringify(this.normalizeForm(this.form)) !== this.snapshot
     },
 
+    // ✅ 统一处理：没登录 / 非管理员
+    ensureManageOrToast() {
+      const token = this.getToken()
+      if (!token) {
+        uni.showToast({ title: '请先微信登录', icon: 'none' })
+        return { ok: false, token: '' }
+      }
+      if (!this.canManage) {
+        uni.showToast({ title: '无权限：仅管理员可操作', icon: 'none' })
+        return { ok: false, token: '' }
+      }
+      return { ok: true, token }
+    },
+
     async onSubmit() {
       if (this.submitting || this.uploading) return
+
+      const auth = this.ensureManageOrToast()
+      if (!auth.ok) return
 
       const msg = this.validate()
       if (msg) {
@@ -630,20 +700,22 @@ export default {
         this.submitting = true
 
         if (this.mode === 'edit') {
-          await foodService.updateFood(this.foodId, payload)
+          // ✅ 传 token 给后端强校验
+          await foodService.updateFood(this.foodId, payload, auth.token)
 
           uni.setStorageSync('needRefreshFoodDetail', this.foodId)
           uni.setStorageSync('needRefreshFoods', 1)
-		  this.safeHideLoading(true)
+          this.safeHideLoading(true)
 
           uni.showToast({ title: '修改成功', icon: 'success' })
-		  setTimeout(() => uni.navigateBack(), 150)
+          setTimeout(() => uni.navigateBack(), 150)
           return
         }
 
-        await foodService.addFood(payload)
+        // ✅ 新增也要传 token（后端同样校验管理员）
+        await foodService.addFood(payload, auth.token)
         uni.setStorageSync('needRefreshFoods', 1)
-		this.safeHideLoading(true)
+        this.safeHideLoading(true)
         uni.showToast({ title: '新增成功', icon: 'success' })
         setTimeout(() => uni.navigateBack(), 150)
       } catch (e) {
