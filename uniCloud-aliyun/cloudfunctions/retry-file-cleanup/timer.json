@@ -1,0 +1,9 @@
+{
+  "triggers": [
+    {
+      "name": "retry_file_cleanup_daily",
+      "type": "timer",
+      "config": "0 10 4 * * ? *"
+    }
+  ]
+}

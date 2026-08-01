@@ -46,7 +46,8 @@ export default {
       active: 0,
       cateList: [],
       cateLevel: [],
-      scrollTop: 0
+      scrollTop: 0,
+      foodRequestSeq: 0
     }
   },
 
@@ -128,11 +129,16 @@ export default {
 
     // 获取右侧菜品
     async loadFoodsByCategory(cateId) {
+      const requestSeq = ++this.foodRequestSeq
       try {
         const foods = await foodService.getFoodsByCategory(String(cateId))
+        if (requestSeq !== this.foodRequestSeq) return false
         this.cateLevel = foods || []
+        return true
       } catch (err) {
+        if (requestSeq !== this.foodRequestSeq) return false
         this.$showError(err, '菜品加载失败', 1500)
+        return false
       }
     },
 
@@ -140,7 +146,8 @@ export default {
     async activeChanged(i) {
       this.active = i
       const cateId = String(this.cateList[i].cate_id)
-      await this.loadFoodsByCategory(cateId)
+      const loaded = await this.loadFoodsByCategory(cateId)
+      if (!loaded || i !== this.active) return
       // 让右侧滚动条回到顶部
       this.scrollTop = this.scrollTop === 0 ? 1 : 0
     },
@@ -153,7 +160,8 @@ export default {
       }
       const raw = this.cateList[this.active]?.cate_id
       if (raw === null || raw === undefined) return
-      await this.loadFoodsByCategory(String(raw))
+      const loaded = await this.loadFoodsByCategory(String(raw))
+      if (!loaded) return
       this.scrollTop = this.scrollTop === 0 ? 1 : 0
     },
 

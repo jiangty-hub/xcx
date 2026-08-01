@@ -225,8 +225,13 @@ export default {
             uni.showLoading({ title: '删除中...' })
 
             const token = this.getToken()
-            await foodService.deleteFood(this.foodId, token) // ✅ 传 token 给后端校验
+            const result = await foodService.deleteFood(this.foodId, token) // ✅ 传 token 给后端校验
             uni.hideLoading()
+
+            const cleanup = result?.cleanup || {}
+            if (cleanup.error || cleanup.skipped) {
+              uni.showToast({ title: '菜品已删除，部分旧图片未清理', icon: 'none' })
+            }
 
             uni.setStorageSync('needRefreshFoods', 1)
 

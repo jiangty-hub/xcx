@@ -2,7 +2,7 @@
 const uniID = require('uni-id-common')
 
 exports.main = async (event, context) => {
-  const { token, nickname, avatar } = event || {}
+  const { token, nickname, avatar, cleanupAvatarFileIds } = event || {}
   const uniIdIns = uniID.createInstance({ context })
 
   if (!token) return { code: 401, msg: '缺少token' }
@@ -15,6 +15,19 @@ exports.main = async (event, context) => {
 
   const uid = payload.uid
   const db = uniCloud.database()
+
+  async function deleteOwnedAvatars(fileIDs) {
+    const prefix = `/avatar/${uid}/`
+    const list = (Array.isArray(fileIDs) ? fileIDs : [])
+      .filter((fileID) => typeof fileID === 'string' && fileID.startsWith('cloud://') && fileID.includes(prefix))
+    if (!list.length) return
+
+    try {
+      await uniCloud.deleteFile({ fileList: list })
+    } catch (e) {
+      console.error('delete avatar files failed:', e)
+    }
+  }
 
   const updateData = {}
 
@@ -38,9 +51,15 @@ exports.main = async (event, context) => {
   }
 
   if (!Object.keys(updateData).length) {
+    await deleteOwnedAvatars(cleanupAvatarFileIds)
     return { code: 0, msg: 'no changes' }
   }
 
+  const oldRes = await db.collection('uni-id-users').doc(uid).field({ avatar: true }).get()
+  const oldAvatar = oldRes.data?.[0]?.avatar || ''
   await db.collection('uni-id-users').doc(uid).update(updateData)
+
+  if (avatar && avatar !== oldAvatar) await deleteOwnedAvatars([oldAvatar])
+  await deleteOwnedAvatars(cleanupAvatarFileIds)
   return { code: 0, msg: 'ok' }
 }

@@ -225,17 +225,65 @@ function validateFoodPayload(payload = {}, { partial = false } = {}) {
   return data
 }
 
-async function deleteCoverFiles(coverImages) {
-  const { fileIDs } = splitCoverList(coverImages)
-  const list = fileIDs.filter(id => id && id.startsWith('cloud://'))
+function isFoodCoverFile(fileID) {
+  if (typeof fileID !== 'string') return false
+  if (fileID.startsWith('cloud://')) return fileID.includes('/foods/')
 
-  if (!list.length) return
+  if (/^https?:\/\//i.test(fileID)) {
+    try {
+      return new URL(fileID).pathname.includes('/foods/')
+    } catch (e) {
+      return false
+    }
+  }
+
+  return false
+}
+
+async function deleteCloudFiles(fileIDs, { foodOnly = false } = {}) {
+  const source = Array.isArray(fileIDs) ? fileIDs : []
+  const storageFiles = source.filter(id => typeof id === 'string' && (/^cloud:\/\//.test(id) || /^https?:\/\//i.test(id)))
+  const list = foodOnly ? storageFiles.filter(isFoodCoverFile) : storageFiles
+  const skipped = source.length - list.length
+
+  if (!list.length) return { deleted: 0, skipped, error: '' }
 
   try {
-    await uniCloud.deleteFile({ fileList: list })
+    const res = await uniCloud.deleteFile({ fileList: list })
+    return { deleted: list.length, skipped, error: '', requestId: res?.requestId || '' }
   } catch (e) {
-    console.error('delete cover files failed:', e)
+    console.error('delete cloud files failed:', e)
+    return { deleted: 0, skipped, error: e?.message || '云存储删除失败' }
   }
+}
+
+async function enqueueFileCleanup(fileIDs, reason, error) {
+  const list = (Array.isArray(fileIDs) ? fileIDs : []).filter(isFoodCoverFile)
+  if (!list.length) return false
+
+  try {
+    await db.collection('file_cleanup_tasks').add({
+      fileIDs: [...new Set(list)],
+      reason,
+      lastError: error || '',
+      status: 'pending',
+      attempts: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    })
+    return true
+  } catch (e) {
+    console.error('enqueue file cleanup failed:', e)
+    return false
+  }
+}
+
+async function deleteCoverFiles(coverImages, reason) {
+  const { fileIDs, urls } = splitCoverList(coverImages)
+  const candidates = [...fileIDs, ...urls]
+  const cleanup = await deleteCloudFiles(candidates, { foodOnly: true })
+  if (cleanup.error) cleanup.queued = await enqueueFileCleanup(candidates, reason, cleanup.error)
+  return cleanup
 }
 
 /**
@@ -328,8 +376,8 @@ module.exports = {
     if (!doc) throw new Error('菜品不存在')
 
     await foods.doc(id).remove()
-    await deleteCoverFiles(doc.cover_images)
-    return true
+    const cleanup = await deleteCoverFiles(doc.cover_images, 'delete-food')
+    return { deleted: true, cleanup }
   },
 
   async updateFood(id, payload = {}, token) {
@@ -340,9 +388,29 @@ module.exports = {
 
     const foods = db.collection('foods')
     const updateData = validateFoodPayload(payload, { partial: true })
+    const old = await foods.doc(id).get()
+    const oldFood = old.data && old.data[0]
+    if (!oldFood) throw new Error('菜品不存在')
 
     await foods.doc(id).update(updateData)
+
+    // 图片先完成数据库更新，再清理本次被移除的旧文件，避免更新失败时误删图片。
+    if (updateData.cover_images) {
+      const next = new Set(updateData.cover_images)
+      const removed = (Array.isArray(oldFood.cover_images) ? oldFood.cover_images : [])
+        .filter(fileID => !next.has(fileID))
+      const cleanup = await deleteCoverFiles(removed, 'update-food')
+      if (cleanup.error || cleanup.skipped) console.warn('update food cover cleanup incomplete:', cleanup)
+    }
     return true
+  },
+
+  async cleanupUploadedCoverFiles(fileIDs, token) {
+    const uid = await requireLogin(this, token)
+    await requireAdmin(this, uid)
+    const cleanup = await deleteCloudFiles(fileIDs, { foodOnly: true })
+    if (cleanup.error) cleanup.queued = await enqueueFileCleanup(fileIDs, 'abandon-upload', cleanup.error)
+    return cleanup
   },
 
   async addFood(payload = {}, token) {

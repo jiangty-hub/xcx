@@ -37,6 +37,7 @@ export default {
   data() {
     return {
       timer: null,
+      searchSeq: 0,
       kw: '',
       searchResults: [],
       historyList: [],
@@ -49,6 +50,11 @@ export default {
     this.historyList = JSON.parse(uni.getStorageSync('kw') || '[]')
   },
 
+  onUnload() {
+    clearTimeout(this.timer)
+    this.searchSeq += 1
+  },
+
   created() {
     // 云对象实例
     this.foodService = uniCloud.importObject('food-service')
@@ -57,33 +63,37 @@ export default {
   methods: {
     onInput(val) {
       clearTimeout(this.timer)
+      const seq = ++this.searchSeq
       this.timer = setTimeout(() => {
         this.kw = val
-        this.search()
+        this.search(seq)
       }, 400)
     },
 
-    async search() {
+    async search(seq = ++this.searchSeq) {
       const keyword = (this.kw || '').trim()
       if (!keyword) {
-        this.searchResults = []
+        if (seq === this.searchSeq) this.searchResults = []
         return
       }
 
-      if (this.loading) return
       this.loading = true
 
       try {
         // 后端已返回：cover_images(fileID数组) + cover_urls(临时链接数组)
         const list = await this.foodService.searchFoods(keyword)
-        this.searchResults = Array.isArray(list) ? list : []
-        this.saveHistory(keyword)
+        if (seq === this.searchSeq) {
+          this.searchResults = Array.isArray(list) ? list : []
+          this.saveHistory(keyword)
+        }
       } catch (e) {
         console.error(e)
-        this.searchResults = []
-        uni.showToast({ title: '搜索失败', icon: 'none' })
+        if (seq === this.searchSeq) {
+          this.searchResults = []
+          uni.showToast({ title: '搜索失败', icon: 'none' })
+        }
       } finally {
-        this.loading = false
+        if (seq === this.searchSeq) this.loading = false
       }
     },
 
@@ -135,7 +145,7 @@ export default {
 
     gotoHistory(item) {
       this.kw = item
-      this.search()
+      this.search(++this.searchSeq)
     }
   },
 

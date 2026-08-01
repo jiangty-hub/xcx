@@ -28,6 +28,7 @@ export default {
       avatarFileId: '',     // 准备写进数据库的 cloud:// fileID
       avatarPreview: '',    // 展示用 URL（本地临时/云端 temp/http）
       avatarChanged: false, // 是否真的改过头像
+      pendingAvatarFileIds: [],
       saving: false
     }
   },
@@ -39,6 +40,10 @@ export default {
 
     // 2) 校验 token + 拉云端资料
     await this.loadFromCloud()
+  },
+
+  onUnload() {
+    this.cleanupPendingAvatars()
   },
 
   methods: {
@@ -143,12 +148,13 @@ export default {
 
         // 立刻预览
         this.avatarPreview = localPath
-        this.avatarChanged = true
 
         uni.showLoading({ title: '上传中...' })
 
         const ext = (localPath.match(/\.\w+$/)?.[0] || '.jpg').toLowerCase()
-        const cloudPath = `avatar/${Date.now()}_${Math.random().toString(16).slice(2)}${ext}`
+        const uid = uni.getStorageSync('uni_id_uid')
+        if (!uid) throw new Error('登录已失效，请重新登录')
+        const cloudPath = `avatar/${uid}/${Date.now()}_${Math.random().toString(16).slice(2)}${ext}`
 
         const upload = await uniCloud.uploadFile({
           cloudPath,
@@ -156,6 +162,9 @@ export default {
         })
 
         this.avatarFileId = upload.fileID || ''
+        if (!this.avatarFileId) throw new Error('头像上传失败')
+        this.avatarChanged = true
+        this.pendingAvatarFileIds.push(this.avatarFileId)
 
         // 将 fileID 转 temp url（避免本地临时路径失效）
         if (this.avatarFileId) {
@@ -199,6 +208,8 @@ export default {
         if (this.avatarChanged && this.avatarFileId) {
           data.avatar = this.avatarFileId
         }
+        const pendingToRemove = this.pendingAvatarFileIds.filter((id) => id !== this.avatarFileId)
+        if (pendingToRemove.length) data.cleanupAvatarFileIds = pendingToRemove
 
         const res = await uniCloud.callFunction({
           name: 'update-user-profile',
@@ -211,6 +222,8 @@ export default {
           return
         }
         if (r.code !== 0) throw new Error(r.msg || '保存失败')
+
+        this.pendingAvatarFileIds = []
 
         // ✅ 更新缓存，保证上一页立刻刷新
         uni.setStorageSync('uni_id_nickname', name)
@@ -229,6 +242,24 @@ export default {
       } finally {
         uni.hideLoading()
         this.saving = false
+      }
+    },
+
+    async cleanupPendingAvatars() {
+      const ids = [...new Set(this.pendingAvatarFileIds)].filter(Boolean)
+      if (!ids.length) return
+
+      this.pendingAvatarFileIds = []
+      const token = uni.getStorageSync('uni_id_token')
+      if (!token) return
+
+      try {
+        await uniCloud.callFunction({
+          name: 'update-user-profile',
+          data: { token, cleanupAvatarFileIds: ids }
+        })
+      } catch (e) {
+        console.error('cleanup pending avatar files failed:', e)
       }
     }
   }

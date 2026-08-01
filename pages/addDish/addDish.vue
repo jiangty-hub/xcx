@@ -167,6 +167,7 @@ export default {
 
       // 图片：数据库存 fileID；页面展示用临时 URL 缓存
       coverUrlMap: {},
+      newlyUploadedCoverIds: [],
       uploading: false,
       uploadProgress: 0,
       uploadTimer: null,
@@ -233,6 +234,8 @@ export default {
   // ✅ 页面离开兜底：强制关闭 loading（避免残留）
   onUnload() {
     this.safeHideLoading(true)
+    this.stopFakeProgress()
+    this.cleanupPendingCovers()
   },
 
   onBackPress() {
@@ -242,10 +245,10 @@ export default {
       uni.showModal({
         title: '提示',
         content: '内容尚未保存，确定要离开吗？',
-        success: (res) => {
-          if (res.confirm) {
-            this.backLock = false
-            uni.navigateBack()
+        success: async (res) => {
+            if (res.confirm) {
+              this.backLock = false
+              await this.leaveWithCleanup()
           } else {
             this.backLock = false
           }
@@ -495,11 +498,13 @@ export default {
             const tmp = await uniCloud.getTempFileURL({ fileList: [fileID] })
             const url = tmp?.fileList?.[0]?.tempFileURL
             if (typeof url === 'string' && url) {
-              this.coverUrlMap[fileID] = url
+            this.coverUrlMap[fileID] = url
             }
           } catch (e) {
             console.error('getTempFileURL failed:', e)
           }
+
+          this.newlyUploadedCoverIds.push(fileID)
 
           const doneCount = i + 1
           this.uploadProgress = Math.min(99, Math.floor((doneCount / totalCount) * 100))
@@ -571,6 +576,7 @@ export default {
       const fid = this.form.cover_images[i]
       this.form.cover_images.splice(i, 1)
       if (fid && this.coverUrlMap[fid]) delete this.coverUrlMap[fid]
+      if (this.newlyUploadedCoverIds.includes(fid)) this.cleanupPendingCovers([fid])
     },
 
     addTag() {
@@ -667,6 +673,26 @@ export default {
       return JSON.stringify(this.normalizeForm(this.form)) !== this.snapshot
     },
 
+    async cleanupPendingCovers(fileIDs = this.newlyUploadedCoverIds) {
+      const ids = [...new Set(fileIDs)].filter(Boolean)
+      if (!ids.length) return
+
+      this.newlyUploadedCoverIds = this.newlyUploadedCoverIds.filter((id) => !ids.includes(id))
+      const token = this.getToken()
+      if (!token) return
+
+      try {
+        await foodService.cleanupUploadedCoverFiles(ids, token)
+      } catch (e) {
+        console.error('cleanup pending cover files failed:', e)
+      }
+    },
+
+    async leaveWithCleanup() {
+      await this.cleanupPendingCovers()
+      uni.navigateBack()
+    },
+
     // ✅ 统一处理：没登录 / 非管理员
     ensureManageOrToast() {
       const token = this.getToken()
@@ -703,6 +729,8 @@ export default {
           // ✅ 传 token 给后端强校验
           await foodService.updateFood(this.foodId, payload, auth.token)
 
+          this.newlyUploadedCoverIds = []
+
           uni.setStorageSync('needRefreshFoodDetail', this.foodId)
           uni.setStorageSync('needRefreshFoods', 1)
           this.safeHideLoading(true)
@@ -714,6 +742,7 @@ export default {
 
         // ✅ 新增也要传 token（后端同样校验管理员）
         await foodService.addFood(payload, auth.token)
+        this.newlyUploadedCoverIds = []
         uni.setStorageSync('needRefreshFoods', 1)
         this.safeHideLoading(true)
         uni.showToast({ title: '新增成功', icon: 'success' })
@@ -734,9 +763,9 @@ export default {
         uni.showModal({
           title: '提示',
           content: '内容尚未保存，确定要离开吗？',
-          success: (res) => {
+          success: async (res) => {
             if (res.confirm) {
-              uni.navigateBack()
+              await this.leaveWithCleanup()
             } else {
               this.backLock = false
             }
@@ -748,7 +777,7 @@ export default {
         return
       }
       this.backLock = true
-      uni.navigateBack()
+      this.leaveWithCleanup()
     }
   }
 }

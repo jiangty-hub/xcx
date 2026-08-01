@@ -1,0 +1,47 @@
+{
+  "bsonType": "object",
+  "permission": {
+    "read": false,
+    "create": false,
+    "update": false,
+    "delete": false
+  },
+  "required": ["fileIDs", "reason", "status", "attempts", "createdAt", "updatedAt"],
+  "properties": {
+    "_id": {
+      "description": "ID, 系统自动生成"
+    },
+    "fileIDs": {
+      "bsonType": "array",
+      "description": "待清理的云存储文件"
+    },
+    "reason": {
+      "bsonType": "string",
+      "description": "创建清理任务的业务原因"
+    },
+    "status": {
+      "bsonType": "string",
+      "description": "pending、done 或 failed"
+    },
+    "attempts": {
+      "bsonType": "int",
+      "description": "已重试次数"
+    },
+    "lastError": {
+      "bsonType": "string",
+      "description": "最近一次失败原因"
+    },
+    "createdAt": {
+      "bsonType": "timestamp",
+      "description": "创建时间戳"
+    },
+    "updatedAt": {
+      "bsonType": "timestamp",
+      "description": "更新时间戳"
+    },
+    "completedAt": {
+      "bsonType": "timestamp",
+      "description": "完成时间戳"
+    }
+  }
+}
