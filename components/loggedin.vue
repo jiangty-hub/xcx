@@ -9,12 +9,12 @@
 						<text class="name">{{ nickname || '用户' }}</text>
 						<text class="desc">已登录</text>
 					</view>
-					<button class="mini" size="mini" @click="$emit('editProfile')" >修改资料</button>
+					<button class="mini" size="mini" :disabled="busy" @click="$emit('editProfile')" >修改资料</button>
 				</view>
 			</view>
 
-			<view class="card">
-				<button class="btn" type="primary" @click="$emit('goAddDish')">新增菜品</button>
+			<view class="card" v-if="canManage">
+				<button class="btn" type="primary" :disabled="busy" @click="$emit('goAddDish')">新增菜品</button>
 			</view>
 
 			<!-- 占位，防止内容被底部按钮挡住 -->
@@ -23,7 +23,7 @@
 
 		<!-- 固定在底部的退出登录 -->
 		<view class="logout-fixed">
-			<button class="btn-danger" @click="$emit('logout')">退出登录</button>
+			<button class="btn-danger" :loading="logoutLoading" :disabled="busy" @click="$emit('logout')">退出登录</button>
 		</view>
 	</view>
 </template>
@@ -33,7 +33,10 @@
 	export default {
 		props: {
 			nickname: { type: String, default: '' },
-			avatar: { type: String, default: '' }
+			avatar: { type: String, default: '' },
+			canManage: { type: Boolean, default: false },
+			busy: { type: Boolean, default: false },
+			logoutLoading: { type: Boolean, default: false }
 		}
 	}
 </script>

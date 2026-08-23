@@ -1,13 +1,16 @@
 <template>
   <view class="page">
     <view v-if="!hasLogin">
-      <notlogin @login="weixinLogin" />
+      <notlogin :loading="authOperation === 'login'" @login="weixinLogin" />
     </view>
 
     <loggedin
       v-else
       :nickname="nickname"
       :avatar="avatar"
+      :canManage="canManage"
+      :busy="!!authOperation"
+      :logoutLoading="authOperation === 'logout'"
       @goAddDish="goAddDish"
       @logout="logout"
       @editProfile="goEditProfile"
@@ -18,6 +21,17 @@
 <script>
 import notlogin from '@/components/notlogin.vue'
 import loggedin from '@/components/loggedin.vue'
+import {
+  applyNewToken,
+  checkManagePermission,
+  clearAuthStorage,
+  getAuthToken,
+  isAuthExpiredResult,
+  resolveCloudFileToUrl
+} from '@/utils/auth.js'
+import { getPendingCleanup, removePendingCleanup } from '@/utils/pending-cleanup.js'
+
+const foodService = uniCloud.importObject('food-service')
 
 export default {
   components: { notlogin, loggedin },
@@ -27,7 +41,12 @@ export default {
       hasLogin: false,
       nickname: '',
       avatar: '', // 展示用 URL（tempFileURL 或 http(s)）
-      uid: ''
+      uid: '',
+      canManage: false,
+      authOperation: '',
+      refreshSeq: 0,
+      refreshTask: null,
+      lastRefreshAt: 0
     }
   },
 
@@ -38,54 +57,44 @@ export default {
   methods: {
     // ======= 基础工具：清理登录态 =======
     clearLoginState() {
+      this.refreshSeq += 1
+      this.lastRefreshAt = 0
       this.hasLogin = false
       this.nickname = ''
       this.avatar = ''
       this.uid = ''
+      this.canManage = false
 
-      uni.removeStorageSync('uni_id_token')
-      uni.removeStorageSync('uni_id_uid')
-      uni.removeStorageSync('uni_id_nickname')
-      uni.removeStorageSync('uni_id_avatar')
-    },
-
-    // ======= 基础工具：判断是否为“登录失效类”错误 =======
-    isAuthExpiredResult(r) {
-      const code = r?.code
-      const msg = String(r?.msg || '')
-      // ✅ 最干净：优先认 401
-      if (code === 401) return true
-      // ✅ 兜底：一些项目会返回其他 code 或 msg
-      if (/token|未登录|登录|失效|过期|unauth|auth/i.test(msg)) return true
-      return false
-    },
-
-    // ======= 基础工具：把可能是 fileID 的 avatar 转成可展示 URL =======
-    async resolveAvatarToUrl(avatarValue) {
-      if (!avatarValue) return ''
-
-      if (/^https?:\/\//i.test(avatarValue)) return avatarValue
-
-      if (/^cloud:\/\//i.test(avatarValue)) {
-        try {
-          const tmp = await uniCloud.getTempFileURL({ fileList: [avatarValue] })
-          return tmp.fileList?.[0]?.tempFileURL || ''
-        } catch (e) {
-          console.log('getTempFileURL failed:', e)
-          return ''
-        }
-      }
-
-      return ''
+      clearAuthStorage()
     },
 
     // ======= 刷新：先缓存秒开，再云端校验 token + 拉最新资料 =======
-    async refresh() {
-      const token = uni.getStorageSync('uni_id_token')
+    async refresh({ force = false } = {}) {
+      if (this.authOperation === 'logout') return
+      if (this.authOperation === 'login' && !force) return
+
+      const token = getAuthToken()
+      if (!force && token && Date.now() - this.lastRefreshAt < 1000) return
+      if (this.refreshTask) return this.refreshTask
+
+      const seq = ++this.refreshSeq
+      const task = this.performRefresh(token, seq)
+      this.refreshTask = task
+
+      try {
+        return await task
+      } finally {
+        if (this.refreshTask === task) {
+          this.refreshTask = null
+        }
+      }
+    },
+
+    async performRefresh(token, seq) {
 
       // 0) 没 token：直接未登录
       if (!token) {
-        this.clearLoginState()
+        if (seq === this.refreshSeq) this.clearLoginState()
         return
       }
 
@@ -102,9 +111,11 @@ export default {
           data: { token }
         })
         const r = res.result || {}
+        if (seq !== this.refreshSeq) return
+        applyNewToken(r)
 
         // token 失效：清理并回到未登录
-        if (this.isAuthExpiredResult(r)) {
+        if (isAuthExpiredResult(r)) {
           this.clearLoginState()
           return
         }
@@ -117,18 +128,15 @@ export default {
         }
 
         const profile = r.profile || {}
-
-        // uid
-        this.uid = r.uid || this.uid
-
-        // nickname：云端优先
+        const nextUid = r.uid || this.uid
         const cloudNickname = (profile.nickname || '').trim()
-        if (cloudNickname) this.nickname = cloudNickname
-
-        // avatar：可能是 URL 或 fileID
+        const nextNickname = cloudNickname || this.nickname
         const cloudAvatar = profile.avatar || ''
-        const avatarUrl = await this.resolveAvatarToUrl(cloudAvatar)
+        const avatarUrl = await resolveCloudFileToUrl(cloudAvatar)
+        if (seq !== this.refreshSeq) return
 
+        this.uid = nextUid
+        this.nickname = nextNickname
         if (avatarUrl) {
           this.avatar = avatarUrl
         } else if (!cloudAvatar) {
@@ -144,14 +152,63 @@ export default {
         else uni.removeStorageSync('uni_id_avatar')
       } catch (e) {
         // 网络/服务抖动：不踢下线，继续用缓存
-        console.log('refresh error:', e)
+        if (seq === this.refreshSeq) console.log('refresh error:', e)
       }
 
+      if (seq !== this.refreshSeq) return
       if (!this.nickname) this.nickname = '用户'
+      await this.refreshPermission(seq)
+      if (seq === this.refreshSeq) this.lastRefreshAt = Date.now()
+    },
+
+    async refreshPermission(seq = this.refreshSeq) {
+      if (seq !== this.refreshSeq) return
+      const token = getAuthToken()
+      if (!token) {
+        this.canManage = false
+        return
+      }
+
+      try {
+        const permission = await checkManagePermission(foodService, token)
+        if (seq !== this.refreshSeq) return
+        if (permission.authExpired) {
+          this.clearLoginState()
+          return
+        }
+        this.canManage = permission.canManage
+        if (this.canManage) await this.retryPendingFoodCleanup()
+      } catch (e) {
+        if (seq !== this.refreshSeq) return
+        this.canManage = false
+        console.error('permission check failed:', e)
+        uni.showToast({ title: e?.message || '权限校验失败，请稍后重试', icon: 'none' })
+      }
+    },
+
+    async retryPendingFoodCleanup() {
+      const ids = getPendingCleanup('food')
+      if (!ids.length) return
+
+      try {
+        const result = await foodService.cleanupUploadedCoverFiles(ids, getAuthToken())
+        applyNewToken(result)
+        const failed = new Set(Array.isArray(result?.failedFileIDs) ? result.failedFileIDs : [])
+        const confirmed = result?.queued ? ids : ids.filter((id) => !failed.has(id))
+        removePendingCleanup('food', confirmed)
+      } catch (e) {
+        console.error('retry pending food cover cleanup failed:', e)
+      }
     },
 
     // ======= 微信登录（mp-weixin） =======
     async weixinLogin() {
+      if (this.authOperation) return
+      this.authOperation = 'login'
+      this.refreshSeq += 1
+      this.refreshTask = null
+      this.lastRefreshAt = 0
+
       try {
         uni.showLoading({ title: '登录中...' })
 
@@ -190,6 +247,7 @@ export default {
 
         const result = res.result || {}
         if (result.code !== 0) throw new Error(result.msg || '登录失败')
+        applyNewToken(result)
 
         // 3) 保存 token/uid
         if (result.token) uni.setStorageSync('uni_id_token', result.token)
@@ -206,9 +264,10 @@ export default {
         try {
           const pRes = await uniCloud.callFunction({
             name: 'get-user-profile',
-            data: { token: result.token }
+            data: { token: getAuthToken() }
           })
           const pr = pRes.result || {}
+          applyNewToken(pr)
           if (pr.code === 0) cloudNickname = pr.profile?.nickname || ''
         } catch (e) {
           console.log('get-user-profile in login failed:', e)
@@ -220,21 +279,23 @@ export default {
           // 初始化昵称（云端没昵称时）
           const uRes = await uniCloud.callFunction({
             name: 'update-user-profile',
-            data: { token: result.token, nickname: nickName }
+            data: { token: getAuthToken(), nickname: nickName }
           })
           const ur = uRes.result || {}
+          applyNewToken(ur)
           if (ur.code === 0) uni.setStorageSync('uni_id_nickname', nickName)
         } else {
-          await this.promptSetNickname(result.token)
+          await this.promptSetNickname(getAuthToken())
         }
 
-        await this.refresh()
+        await this.refresh({ force: true })
         uni.showToast({ title: '登录成功', icon: 'success' })
       } catch (e) {
         console.error(e)
         uni.showToast({ title: e.message || '登录失败', icon: 'none' })
       } finally {
         uni.hideLoading()
+        this.authOperation = ''
       }
     },
 
@@ -260,6 +321,7 @@ export default {
                   data: { token, nickname: name }
                 })
                 const rr = res.result || {}
+                applyNewToken(rr)
                 if (rr.code !== 0) throw new Error(rr.msg || '保存失败')
 
                 uni.setStorageSync('uni_id_nickname', name)
@@ -278,6 +340,11 @@ export default {
 
     // ======= 退出登录 =======
     async logout() {
+      if (this.authOperation) return
+      this.authOperation = 'logout'
+      this.refreshSeq += 1
+      this.refreshTask = null
+
       try {
         await uniCloud.callFunction({
           name: 'uni-id-cf',
@@ -285,9 +352,11 @@ export default {
         })
       } catch (e) {
         console.error(e)
+      } finally {
+        this.clearLoginState()
+        this.authOperation = ''
       }
 
-      this.clearLoginState()
       uni.showToast({ title: '已退出', icon: 'none' })
     },
 
@@ -302,7 +371,7 @@ export default {
         url: '/pages/profile/edit',
         success: (res) => {
           res.eventChannel.on('profileUpdated', () => {
-            this.refresh()
+            this.refresh({ force: true })
           })
         }
       })

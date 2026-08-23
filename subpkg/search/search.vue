@@ -4,14 +4,26 @@
       <uni-search-bar v-model="kw" @input="onInput" :radius="100" cancelButton="none" />
     </view>
 
-    <!-- 搜索结果 -->
-    <view class="sugg-list" v-if="searchResults.length">
-      <view class="sugg-item" v-for="(item, i) in searchResults" :key="item._id || i" @click="gotoDetail(item)">
-        <!-- 改：优先用 cover_urls[0] 展示（后端 searchFoods 已补 cover_urls） -->
-        <image :src="getCover(item)" class="item-image" mode="aspectFill" />
-        <text class="item-text">{{ item.name }}</text>
-      </view>
+    <view v-if="loading" class="search-state">搜索中...</view>
+    <view v-else-if="searchError" class="search-state error-state">
+      <text>{{ searchError }}</text>
+      <button size="mini" @click="retrySearch">重试</button>
     </view>
+
+    <!-- 搜索结果 -->
+    <view v-else-if="searchResults.length">
+      <view class="sugg-list">
+        <view class="sugg-item" v-for="(item, i) in searchResults" :key="item._id || item.foodId || i" @click="gotoDetail(item)">
+          <!-- 改：优先用 cover_urls[0] 展示（后端 searchFoods 已补 cover_urls） -->
+          <image :src="getCover(item)" class="item-image" mode="aspectFill" />
+          <text class="item-text">{{ item.name }}</text>
+        </view>
+      </view>
+      <view v-if="loadingMore" class="load-more-state">加载更多...</view>
+      <view v-else-if="!searchHasMore" class="load-more-state">已经到底了</view>
+    </view>
+
+    <view v-else-if="hasSearched && kw.trim()" class="search-state">没有找到相关菜品</view>
 
     <!-- 搜索历史 -->
     <view class="history-box" v-else>
@@ -19,7 +31,7 @@
         <text>搜索历史</text>
         <uni-icons type="trash" size="19" @click="clean" />
       </view>
-      <view class="history-list">
+      <view class="history-list" v-if="histories.length">
         <uni-tag
           type="default"
           :text="item"
@@ -28,6 +40,7 @@
           @click="gotoHistory(item)"
         />
       </view>
+      <view v-else class="history-empty">暂无搜索历史</view>
     </view>
   </view>
 </template>
@@ -42,17 +55,33 @@ export default {
       searchResults: [],
       historyList: [],
       loading: false,
+      loadingMore: false,
+      hasSearched: false,
+      searchError: '',
+      searchPage: 1,
+      searchHasMore: false,
       foodService: null
     }
   },
 
   onShow() {
-    this.historyList = JSON.parse(uni.getStorageSync('kw') || '[]')
+    try {
+      const stored = uni.getStorageSync('kw')
+      const parsed = typeof stored === 'string' ? JSON.parse(stored || '[]') : stored
+      this.historyList = Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string').slice(-20) : []
+    } catch (e) {
+      this.historyList = []
+      uni.removeStorageSync('kw')
+    }
   },
 
   onUnload() {
     clearTimeout(this.timer)
     this.searchSeq += 1
+  },
+
+  onReachBottom() {
+    this.loadMoreResults()
   },
 
   created() {
@@ -64,37 +93,105 @@ export default {
     onInput(val) {
       clearTimeout(this.timer)
       const seq = ++this.searchSeq
+      if (!String(val || '').trim()) {
+        this.kw = ''
+        this.searchResults = []
+        this.hasSearched = false
+        this.searchError = ''
+        this.loading = false
+        this.loadingMore = false
+        this.searchPage = 1
+        this.searchHasMore = false
+        return
+      }
+      // 新关键词进入防抖等待后，立即禁用旧结果的续页，避免不同关键词串页。
+      this.searchPage = 1
+      this.searchHasMore = false
+      this.loadingMore = false
       this.timer = setTimeout(() => {
         this.kw = val
         this.search(seq)
       }, 400)
     },
 
-    async search(seq = ++this.searchSeq) {
+    async search(seq = ++this.searchSeq, { append = false } = {}) {
       const keyword = (this.kw || '').trim()
       if (!keyword) {
-        if (seq === this.searchSeq) this.searchResults = []
+        if (seq === this.searchSeq) {
+          this.searchResults = []
+          this.hasSearched = false
+          this.searchError = ''
+          this.loading = false
+          this.loadingMore = false
+          this.searchPage = 1
+          this.searchHasMore = false
+        }
         return
       }
 
-      this.loading = true
+      if (append) {
+        if (this.loading || this.loadingMore || !this.searchHasMore) return
+        this.loadingMore = true
+      } else {
+        this.loading = true
+        this.loadingMore = false
+      }
+      this.hasSearched = true
+      if (!append) this.searchError = ''
+
+      const page = append ? this.searchPage + 1 : 1
+      const pageSize = 30
 
       try {
         // 后端已返回：cover_images(fileID数组) + cover_urls(临时链接数组)
-        const list = await this.foodService.searchFoods(keyword)
+        const result = await this.foodService.searchFoods(keyword, { page, pageSize })
         if (seq === this.searchSeq) {
-          this.searchResults = Array.isArray(list) ? list : []
-          this.saveHistory(keyword)
+          const list = Array.isArray(result)
+            ? result
+            : (Array.isArray(result?.list) ? result.list : [])
+          const hasMore = Array.isArray(result)
+            ? false
+            : Boolean(result?.hasMore)
+
+          if (append) {
+            const seen = new Set(this.searchResults.map((item) => item._id || item.foodId).filter(Boolean))
+            const additions = list.filter((item) => {
+              const id = item && (item._id || item.foodId)
+              if (!id || !seen.has(id)) {
+                if (id) seen.add(id)
+                return true
+              }
+              return false
+            })
+            this.searchResults = this.searchResults.concat(additions)
+          } else {
+            this.searchResults = list
+            this.saveHistory(keyword)
+          }
+          this.searchPage = page
+          this.searchHasMore = hasMore
         }
       } catch (e) {
         console.error(e)
         if (seq === this.searchSeq) {
-          this.searchResults = []
-          uni.showToast({ title: '搜索失败', icon: 'none' })
+          if (append) {
+            uni.showToast({ title: e?.message || '加载更多失败', icon: 'none' })
+          } else {
+            this.searchResults = []
+            this.searchHasMore = false
+            this.searchError = e?.message || '搜索失败'
+          }
         }
       } finally {
-        if (seq === this.searchSeq) this.loading = false
+        if (seq === this.searchSeq) {
+          if (append) this.loadingMore = false
+          else this.loading = false
+        }
       }
+    },
+
+    loadMoreResults() {
+      return this.search(this.searchSeq, { append: true })
     },
 
     gotoDetail(item) {
@@ -134,7 +231,7 @@ export default {
       const set = new Set(this.historyList)
       set.delete(keyword)
       set.add(keyword)
-      this.historyList = Array.from(set)
+      this.historyList = Array.from(set).slice(-20)
       uni.setStorageSync('kw', JSON.stringify(this.historyList))
     },
 
@@ -144,7 +241,12 @@ export default {
     },
 
     gotoHistory(item) {
+      clearTimeout(this.timer)
       this.kw = item
+      this.search(++this.searchSeq)
+    },
+
+    retrySearch() {
       this.search(++this.searchSeq)
     }
   },
@@ -162,6 +264,20 @@ export default {
   position: sticky;
   top: 0;
   z-index: 999;
+}
+
+.search-state {
+  min-height: 360rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20rpx;
+  color: #999;
+}
+
+.error-state {
+  color: #666;
 }
 
 .item-image {
@@ -182,6 +298,13 @@ export default {
 .sugg-list {
   display: flex;
   flex-wrap: wrap;
+}
+
+.load-more-state {
+  padding: 20rpx 0 32rpx;
+  text-align: center;
+  color: #999;
+  font-size: 24rpx;
 }
 
 .sugg-item {
@@ -212,6 +335,13 @@ export default {
   .history-list {
     display: flex;
     flex-wrap: wrap;
+  }
+
+  .history-empty {
+    padding: 80rpx 0;
+    text-align: center;
+    color: #999;
+    font-size: 26rpx;
   }
 
   .uni-tag {

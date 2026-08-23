@@ -25,6 +25,10 @@ exports.main = async (event, context) => {
     code: 0,
     msg: 'ok',
     uid,
+    newToken: payload.token
+      ? { token: payload.token, tokenExpired: payload.tokenExpired }
+      : undefined,
+    tokenExpired: payload.tokenExpired,
     profile: {
       nickname: user.nickname || '',
       avatar: user.avatar || ''

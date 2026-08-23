@@ -8,12 +8,16 @@
 			</view>
 		</view>
 		
-		<button class="btn" type="primary" @click="$emit('login')">微信一键登录</button>
+		<button class="btn" type="primary" :loading="loading" :disabled="loading" @click="$emit('login')">微信一键登录</button>
 	</view>
 </template>
 
 <script>
-	export default {}
+	export default {
+		props: {
+			loading: { type: Boolean, default: false }
+		}
+	}
 </script>
 
 <style scoped>

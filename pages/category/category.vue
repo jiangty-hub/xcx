@@ -17,8 +17,20 @@
       </scroll-view>
 
       <!--右侧菜品区域-->
-      <scroll-view scroll-y="true" :style="{ height: wh + 'px' }" :scroll-top="scrollTop">
-        <view class="right-scroll-view">
+      <scroll-view
+        scroll-y="true"
+        :style="{ height: wh + 'px' }"
+        :scroll-top="scrollTop"
+        :lower-threshold="80"
+        @scrolltolower="loadMoreFoods"
+      >
+        <view v-if="loadingFoods && !cateLevel.length" class="state-view">菜品加载中...</view>
+        <view v-else-if="foodError && !cateLevel.length" class="state-view error-state">
+          <text>{{ foodError }}</text>
+          <button size="mini" @click="retryFoods">重试</button>
+        </view>
+        <view v-else-if="!cateLevel.length" class="state-view">该分类暂无菜品</view>
+        <view v-else class="right-scroll-view">
           <view
             class="right-scroll-view-item"
             v-for="(item, i2) in cateLevel"
@@ -30,6 +42,8 @@
 
             <text class="item-text">{{ item.name }}</text>
           </view>
+          <view class="list-footer" v-if="loadingFoods">加载更多...</view>
+          <view class="list-footer" v-else-if="!foodHasMore">已经到底了</view>
         </view>
       </scroll-view>
     </view>
@@ -47,7 +61,11 @@ export default {
       cateList: [],
       cateLevel: [],
       scrollTop: 0,
-      foodRequestSeq: 0
+      foodRequestSeq: 0,
+      foodPage: 1,
+      foodHasMore: false,
+      loadingFoods: false,
+      foodError: ''
     }
   },
 
@@ -91,21 +109,32 @@ export default {
       return defaultImg
     },
 
-    // 从 storage 读取 home 传来的分类，并切换
+    // 从 storage 读取 home 传来的分类 ID，并切换。
+    // selectedCategory 仅用于兼容旧版本留下的名称缓存。
     async applySelectedCategoryFromStorage() {
-      // 你这里用的是 wx.getStorageSync，我保持不动（在小程序端没问题）
-      const selectedCategory = wx.getStorageSync('selectedCategory')
-      if (!selectedCategory) return
+      const selectedCategoryId = uni.getStorageSync('selectedCategoryId')
+      const selectedCategory = uni.getStorageSync('selectedCategory')
+      const hasCategoryId = selectedCategoryId !== undefined &&
+        selectedCategoryId !== null && selectedCategoryId !== ''
+      if (!hasCategoryId && !selectedCategory) return
       if (!this.cateList || this.cateList.length === 0) return
 
-      const index = this.cateList.findIndex(
-        (item) => item.name === selectedCategory || item.name.replace(/类$/, '') === selectedCategory
-      )
+      let index = -1
+      if (hasCategoryId) {
+        index = this.cateList.findIndex(
+          (item) => String(item.cate_id) === String(selectedCategoryId)
+        )
+      } else {
+        index = this.cateList.findIndex(
+          (item) => item.name === selectedCategory || item.name.replace(/类$/, '') === selectedCategory
+        )
+      }
 
       if (index !== -1) {
         await this.activeChanged(index)
       }
-      wx.removeStorageSync('selectedCategory')
+      uni.removeStorageSync('selectedCategoryId')
+      uni.removeStorageSync('selectedCategory')
     },
 
     // 获取分类列表数组
@@ -117,7 +146,8 @@ export default {
         // 默认加载第一个分类的右侧菜品
         if (this.cateList.length > 0) {
           const firstCateId = String(this.cateList[0].cate_id)
-          await this.loadFoodsByCategory(firstCateId)
+          const loaded = await this.loadFoodsByCategory(firstCateId)
+          if (loaded) this.active = 0
         }
 
         // 如果 home 传了 selectedCategory，优先切换到对应分类
@@ -128,28 +158,59 @@ export default {
     },
 
     // 获取右侧菜品
-    async loadFoodsByCategory(cateId) {
+    async loadFoodsByCategory(cateId, { append = false, inlineError = true } = {}) {
+      if (append && (this.loadingFoods || !this.foodHasMore)) return false
+
       const requestSeq = ++this.foodRequestSeq
+      const page = append ? this.foodPage + 1 : 1
+      this.loadingFoods = true
+      if (!append) this.foodError = ''
       try {
-        const foods = await foodService.getFoodsByCategory(String(cateId))
+        const result = await foodService.getFoodsByCategory(String(cateId), { page, pageSize: 30 })
         if (requestSeq !== this.foodRequestSeq) return false
-        this.cateLevel = foods || []
+
+        const list = Array.isArray(result) ? result : (result?.list || [])
+        this.cateLevel = append ? [...this.cateLevel, ...list] : list
+        this.foodPage = page
+        this.foodHasMore = Array.isArray(result) ? false : !!result?.hasMore
+        this.foodError = ''
         return true
       } catch (err) {
         if (requestSeq !== this.foodRequestSeq) return false
-        this.$showError(err, '菜品加载失败', 1500)
+        if (!append && inlineError && !this.cateLevel.length) {
+          this.foodError = err?.message || '菜品加载失败'
+        } else {
+          this.foodError = ''
+          this.$showError(err, append ? '加载更多失败' : '菜品加载失败', 1500)
+        }
         return false
+      } finally {
+        if (requestSeq === this.foodRequestSeq) this.loadingFoods = false
       }
     },
 
     // 左侧切换
     async activeChanged(i) {
+      const category = this.cateList[i]
+      if (!category) return
+      const cateId = String(category.cate_id)
+      const loaded = await this.loadFoodsByCategory(cateId, { inlineError: false })
+      if (!loaded) return
       this.active = i
-      const cateId = String(this.cateList[i].cate_id)
-      const loaded = await this.loadFoodsByCategory(cateId)
-      if (!loaded || i !== this.active) return
       // 让右侧滚动条回到顶部
       this.scrollTop = this.scrollTop === 0 ? 1 : 0
+    },
+
+    async loadMoreFoods() {
+      const raw = this.cateList[this.active]?.cate_id
+      if (raw === null || raw === undefined) return
+      await this.loadFoodsByCategory(String(raw), { append: true })
+    },
+
+    retryFoods() {
+      const raw = this.cateList[this.active]?.cate_id
+      if (raw === null || raw === undefined) return
+      this.loadFoodsByCategory(String(raw))
     },
 
     // 给详情页删除成功后调用/以及 onShow 自动刷新用
@@ -230,6 +291,29 @@ export default {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+.state-view {
+  min-height: 360rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20rpx;
+  color: #999;
+  font-size: 28rpx;
+}
+
+.error-state {
+  color: #666;
+}
+
+.list-footer {
+  width: 100%;
+  padding: 12rpx 0 28rpx;
+  text-align: center;
+  color: #999;
+  font-size: 24rpx;
 }
 
 .item-image {

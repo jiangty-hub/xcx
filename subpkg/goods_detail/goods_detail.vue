@@ -1,5 +1,11 @@
 <template>
   <view class="page">
+    <view v-if="loading" class="detail-state">菜品加载中...</view>
+    <view v-else-if="loadError" class="detail-state error-state">
+      <text>{{ loadError }}</text>
+      <button size="mini" @click="retryDetail">重试</button>
+    </view>
+    <block v-else>
     <!-- 菜品轮播图 -->
     <swiper
       class="dish-swiper"
@@ -85,19 +91,22 @@
 
     <!-- ✅ 底部操作按钮：只有有权限才显示 -->
     <view class="bottom-actions" v-if="canManage">
-      <view class="action-btn collect-btn" @click="onDelete">
+      <view class="action-btn collect-btn" :class="{ disabled: deleting }" @click="onDelete">
         <text class="btn-icon">🗑️</text>
-        <text class="btn-text">删除菜品</text>
+        <text class="btn-text">{{ deleting ? '删除中...' : '删除菜品' }}</text>
       </view>
-      <view class="action-btn primary-btn" @click="onEdit">
+      <view class="action-btn primary-btn" :class="{ disabled: deleting }" @click="onEdit">
         <text class="btn-icon">📝</text>
         <text class="btn-text">修改菜品</text>
       </view>
     </view>
+    </block>
   </view>
 </template>
 
 <script>
+import { applyNewToken, checkManagePermission, getAuthToken } from '@/utils/auth.js'
+
 const foodService = uniCloud.importObject('food-service')
 
 export default {
@@ -105,17 +114,21 @@ export default {
     return {
       cid_info: {},
       foodId: '',
-      loading: false,
+      loading: true,
+      loadError: '',
+      deleting: false,
 
       // ✅ 权限
-      canManage: false
+      canManage: false,
+      isFirstShow: true
     }
   },
 
   async onLoad(options) {
     const id = options.id
     if (!id) {
-      uni.showToast({ title: '缺少菜品id', icon: 'none' })
+      this.loading = false
+      this.loadError = '缺少菜品id'
       return
     }
     this.foodId = id
@@ -131,7 +144,12 @@ export default {
       uni.removeStorageSync('needRefreshFoodDetail')
       await this.getDishDetailById(this.foodId)
     }
-    // ✅ 返回详情页时也刷新一下权限（避免刚登录/刚退出）
+    // 首次进入时 onLoad 已校验权限，避免 onShow 再发一遍相同请求。
+    if (this.isFirstShow) {
+      this.isFirstShow = false
+      return
+    }
+    // 返回详情页时刷新权限（例如用户刚登录或退出）。
     await this.refreshPermission()
   },
 
@@ -149,19 +167,14 @@ export default {
         if (httpOnly.length) return httpOnly
       }
 
-      return []
+      return ['/static/cover-default.png']
     }
   },
 
   methods: {
     // ✅ 统一取 token：兼容不同项目里存 token 的 key
     getToken() {
-      return (
-        uni.getStorageSync('uni_id_token') ||
-        uni.getStorageSync('uniIdToken') ||
-        uni.getStorageSync('token') ||
-        ''
-      )
+      return getAuthToken()
     },
 
     // ✅ 刷新是否有“删除/修改”的权限
@@ -173,10 +186,12 @@ export default {
       }
       try {
         // 后端会校验：token 是否有效 + uid 是否在白名单
-        const ok = await foodService.canManage(token)
-        this.canManage = !!ok
+        const permission = await checkManagePermission(foodService, token)
+        this.canManage = permission.canManage
       } catch (e) {
         this.canManage = false
+        console.error('permission check failed:', e)
+        uni.showToast({ title: e?.message || '权限校验失败，请稍后重试', icon: 'none' })
       }
     },
 
@@ -184,10 +199,12 @@ export default {
     async getDishDetailById(id) {
       try {
         this.loading = true
+        this.loadError = ''
         const dish = await foodService.getFoodDetail(id)
         this.cid_info = dish || {}
       } catch (err) {
-        uni.showToast({ title: '未找到菜品', icon: 'none' })
+        this.cid_info = {}
+        this.loadError = err?.message || '未找到菜品'
         console.error(err)
       } finally {
         this.loading = false
@@ -203,30 +220,40 @@ export default {
     },
 
     formatPrice(price) {
-      return price || '000'
+      if (price === null || price === undefined || price === '') return '0'
+      const value = Number(price)
+      return Number.isFinite(value) ? String(value) : '0'
+    },
+
+    retryDetail() {
+      if (this.foodId) this.getDishDetailById(this.foodId)
     },
 
     // 删除：删完回到分类页
     async onDelete() {
-      if (!this.foodId) return
+      if (!this.foodId || this.deleting) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限，请登录管理员账号', icon: 'none' })
         return
       }
 
+      this.deleting = true
       uni.showModal({
         title: '确认删除',
         content: `确定要删除「${this.cid_info?.name || ''}」吗？`,
         confirmText: '删除',
         confirmColor: '#ff4d4f',
         success: async (res) => {
-          if (!res.confirm) return
+          if (!res.confirm) {
+            this.deleting = false
+            return
+          }
           try {
             uni.showLoading({ title: '删除中...' })
 
             const token = this.getToken()
             const result = await foodService.deleteFood(this.foodId, token) // ✅ 传 token 给后端校验
-            uni.hideLoading()
+            applyNewToken(result)
 
             const cleanup = result?.cleanup || {}
             if (cleanup.error || cleanup.skipped) {
@@ -244,17 +271,22 @@ export default {
               uni.reLaunch({ url: '/pages/category/category' })
             }
           } catch (e) {
-            uni.hideLoading()
             uni.showToast({ title: e?.message || '删除失败', icon: 'none' })
             console.error(e)
+          } finally {
+            uni.hideLoading()
+            this.deleting = false
           }
+        },
+        fail: () => {
+          this.deleting = false
         }
       })
     },
 
     // 修改：去编辑页
     onEdit() {
-      if (!this.foodId) return
+      if (!this.foodId || this.deleting) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限，请登录管理员账号', icon: 'none' })
         return
@@ -274,6 +306,25 @@ page {
 
 .page {
   padding-bottom: 120rpx;
+}
+
+.detail-state {
+  min-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24rpx;
+  color: #999;
+}
+
+.error-state {
+  color: #666;
+}
+
+.action-btn.disabled {
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 /* 轮播图样式 */

@@ -50,7 +50,7 @@
 
       <!-- 封面图（✅ 存 fileID，展示用临时 URL） -->
       <view class="card">
-        <view class="section-title">菜品图片</view>
+        <view class="section-title">菜品图片（{{ form.cover_images.length }}/{{ maxCoverImages }}）</view>
 
         <view class="img-list" v-if="form.cover_images.length">
           <view class="img-item" v-for="(fid, idx) in form.cover_images" :key="idx">
@@ -64,17 +64,17 @@
         <view class="row">
           <view
             class="btn small btn-add"
-            :class="{ disabled: uploading || !canManage }"
+            :class="{ disabled: uploading || !canManage || form.cover_images.length >= maxCoverImages }"
             @click="chooseAndUploadCover('album')"
           >
-            {{ uploading ? '上传中...' : '从相册选择' }}
+            {{ uploading ? '上传中...' : (form.cover_images.length >= maxCoverImages ? '已达图片上限' : '从相册选择') }}
           </view>
           <view
             class="btn small btn-add"
-            :class="{ disabled: uploading || !canManage }"
+            :class="{ disabled: uploading || !canManage || form.cover_images.length >= maxCoverImages }"
             @click="chooseAndUploadCover('camera')"
           >
-            {{ uploading ? '上传中...' : '拍照上传' }}
+            {{ uploading ? '上传中...' : (form.cover_images.length >= maxCoverImages ? '已达图片上限' : '拍照上传') }}
           </view>
         </view>
 
@@ -151,7 +151,20 @@
 </template>
 
 <script>
+import { applyNewToken, checkManagePermission, getAuthToken } from '@/utils/auth.js'
+import { addPendingCleanup, getPendingCleanup, removePendingCleanup } from '@/utils/pending-cleanup.js'
+
 const foodService = uniCloud.importObject('food-service')
+const STORAGE_FILE_BATCH_SIZE = 50
+const MAX_COVER_IMAGES = 9
+
+function chunkList(list, size = STORAGE_FILE_BATCH_SIZE) {
+  const chunks = []
+  for (let i = 0; i < list.length; i += size) {
+    chunks.push(list.slice(i, i + size))
+  }
+  return chunks
+}
 
 export default {
   data() {
@@ -166,6 +179,7 @@ export default {
       canManage: false,
 
       // 图片：数据库存 fileID；页面展示用临时 URL 缓存
+      maxCoverImages: MAX_COVER_IMAGES,
       coverUrlMap: {},
       newlyUploadedCoverIds: [],
       uploading: false,
@@ -210,6 +224,10 @@ export default {
 
     // ✅ 先判断权限（没权限也可以看页面，但不能提交/上传）
     await this.refreshPermission()
+    if (this.canManage) {
+      this.newlyUploadedCoverIds = getPendingCleanup('food')
+      await this.cleanupPendingCovers()
+    }
 
     if (this.mode === 'edit') {
       if (!this.foodId) {
@@ -217,7 +235,8 @@ export default {
         uni.navigateBack()
         return
       }
-      await this.loadForEdit()
+      const loaded = await this.loadForEdit()
+      if (!loaded) return
       this.syncCateIndexByForm()
       await this.hydrateCoverUrls()
     } else {
@@ -231,14 +250,23 @@ export default {
     this.snapshot = JSON.stringify(this.normalizeForm(this.form))
   },
 
-  // ✅ 页面离开兜底：强制关闭 loading（避免残留）
+  // 页面离开兜底：提交/上传进行中时只保留待清理记录，避免与写库请求并发删除图片。
   onUnload() {
     this.safeHideLoading(true)
     this.stopFakeProgress()
-    this.cleanupPendingCovers()
+    if (!this.submitting && !this.uploading) {
+      this.cleanupPendingCovers()
+    }
   },
 
   onBackPress() {
+    if (this.submitting || this.uploading) {
+      uni.showToast({
+        title: this.submitting ? '正在提交，请稍候' : '图片上传中，请稍候',
+        icon: 'none'
+      })
+      return true
+    }
     if (this.backLock) return true
     if (this.isDirty()) {
       this.backLock = true
@@ -246,9 +274,8 @@ export default {
         title: '提示',
         content: '内容尚未保存，确定要离开吗？',
         success: async (res) => {
-            if (res.confirm) {
-              this.backLock = false
-              await this.leaveWithCleanup()
+          if (res.confirm) {
+            await this.leaveWithCleanup()
           } else {
             this.backLock = false
           }
@@ -265,12 +292,7 @@ export default {
   methods: {
     // ✅ 统一取 token：兼容不同项目里存 token 的 key
     getToken() {
-      return (
-        uni.getStorageSync('uni_id_token') ||
-        uni.getStorageSync('uniIdToken') ||
-        uni.getStorageSync('token') ||
-        ''
-      )
+      return getAuthToken()
     },
 
     // ✅ 校验权限（token 有效且 uid 在管理员白名单）
@@ -281,10 +303,12 @@ export default {
         return
       }
       try {
-        const ok = await foodService.canManage(token)
-        this.canManage = !!ok
+        const permission = await checkManagePermission(foodService, token)
+        this.canManage = permission.canManage
       } catch (e) {
         this.canManage = false
+        console.error('permission check failed:', e)
+        uni.showToast({ title: e?.message || '权限校验失败，请稍后重试', icon: 'none' })
       }
     },
 
@@ -348,10 +372,12 @@ export default {
           ingredients: Array.isArray(dish.ingredients) ? dish.ingredients : [],
           steps: Array.isArray(dish.steps) ? dish.steps : []
         }
+        return true
       } catch (e) {
         uni.showToast({ title: e?.message || '加载失败', icon: 'none' })
         this.safeHideLoading(true)
         setTimeout(() => uni.navigateBack(), 150)
+        return false
       } finally {
         this.safeHideLoading()
       }
@@ -399,13 +425,15 @@ export default {
       })
       if (!ids.length) return
 
-      try {
-        const res = await uniCloud.getTempFileURL({ fileList: ids })
-        ;(res.fileList || []).forEach((it) => {
-          if (it.fileID && it.tempFileURL) this.coverUrlMap[it.fileID] = it.tempFileURL
-        })
-      } catch (e) {
-        console.error('hydrateCoverUrls failed:', e)
+      for (const batch of chunkList(ids)) {
+        try {
+          const res = await uniCloud.getTempFileURL({ fileList: batch })
+          ;(res.fileList || []).forEach((it) => {
+            if (it.fileID && it.tempFileURL) this.coverUrlMap[it.fileID] = it.tempFileURL
+          })
+        } catch (e) {
+          console.error('hydrateCoverUrls failed:', e)
+        }
       }
     },
 
@@ -416,6 +444,12 @@ export default {
       }
       if (this.uploading) return
 
+      const remaining = this.maxCoverImages - this.form.cover_images.length
+      if (remaining <= 0) {
+        uni.showToast({ title: `菜品图片最多${this.maxCoverImages}张`, icon: 'none' })
+        return
+      }
+
       let uploadFinished = false
 
       try {
@@ -424,7 +458,7 @@ export default {
 
         if (isWeixinMP && typeof uni.chooseMedia === 'function') {
           const res = await uni.chooseMedia({
-            count: 9,
+            count: remaining,
             mediaType: ['image'],
             sizeType: ['compressed'],
             sourceType: [source]
@@ -435,7 +469,7 @@ export default {
             .filter((p) => typeof p === 'string' && p.length)
         } else {
           const res = await uni.chooseImage({
-            count: 9,
+            count: remaining,
             sizeType: ['compressed'],
             sourceType: [source]
           })
@@ -448,6 +482,8 @@ export default {
               .filter((p) => typeof p === 'string' && p.length)
           }
         }
+
+        tempPaths = tempPaths.slice(0, remaining)
 
         if (!tempPaths.length) {
           uni.showToast({ title: '未获取到图片路径', icon: 'none' })
@@ -505,6 +541,7 @@ export default {
           }
 
           this.newlyUploadedCoverIds.push(fileID)
+          addPendingCleanup('food', [fileID])
 
           const doneCount = i + 1
           this.uploadProgress = Math.min(99, Math.floor((doneCount / totalCount) * 100))
@@ -677,20 +714,41 @@ export default {
       const ids = [...new Set(fileIDs)].filter(Boolean)
       if (!ids.length) return
 
-      this.newlyUploadedCoverIds = this.newlyUploadedCoverIds.filter((id) => !ids.includes(id))
+      addPendingCleanup('food', ids)
       const token = this.getToken()
       if (!token) return
 
       try {
-        await foodService.cleanupUploadedCoverFiles(ids, token)
+        const result = await foodService.cleanupUploadedCoverFiles(ids, token)
+        applyNewToken(result)
+
+        const failed = new Set(Array.isArray(result?.failedFileIDs) ? result.failedFileIDs : [])
+        const confirmed = result?.queued
+          ? ids
+          : ids.filter((id) => !failed.has(id))
+
+        removePendingCleanup('food', confirmed)
+        this.newlyUploadedCoverIds = this.newlyUploadedCoverIds.filter((id) => !confirmed.includes(id))
       } catch (e) {
         console.error('cleanup pending cover files failed:', e)
       }
     },
 
+    commitCurrentCovers() {
+      const current = new Set(this.form.cover_images || [])
+      const committed = this.newlyUploadedCoverIds.filter((id) => current.has(id))
+      removePendingCleanup('food', committed)
+      this.newlyUploadedCoverIds = this.newlyUploadedCoverIds.filter((id) => !current.has(id))
+    },
+
     async leaveWithCleanup() {
       await this.cleanupPendingCovers()
-      uni.navigateBack()
+      uni.navigateBack({
+        fail: () => {
+          this.backLock = false
+          uni.showToast({ title: '返回失败，请重试', icon: 'none' })
+        }
+      })
     },
 
     // ✅ 统一处理：没登录 / 非管理员
@@ -727,9 +785,9 @@ export default {
 
         if (this.mode === 'edit') {
           // ✅ 传 token 给后端强校验
-          await foodService.updateFood(this.foodId, payload, auth.token)
-
-          this.newlyUploadedCoverIds = []
+          const result = await foodService.updateFood(this.foodId, payload, auth.token)
+          applyNewToken(result)
+          this.commitCurrentCovers()
 
           uni.setStorageSync('needRefreshFoodDetail', this.foodId)
           uni.setStorageSync('needRefreshFoods', 1)
@@ -741,8 +799,9 @@ export default {
         }
 
         // ✅ 新增也要传 token（后端同样校验管理员）
-        await foodService.addFood(payload, auth.token)
-        this.newlyUploadedCoverIds = []
+        const result = await foodService.addFood(payload, auth.token)
+        applyNewToken(result)
+        this.commitCurrentCovers()
         uni.setStorageSync('needRefreshFoods', 1)
         this.safeHideLoading(true)
         uni.showToast({ title: '新增成功', icon: 'success' })
@@ -757,6 +816,13 @@ export default {
     },
 
     onCancel() {
+      if (this.submitting || this.uploading) {
+        uni.showToast({
+          title: this.submitting ? '正在提交，请稍候' : '图片上传中，请稍候',
+          icon: 'none'
+        })
+        return
+      }
       if (this.backLock) return
       if (this.isDirty()) {
         this.backLock = true

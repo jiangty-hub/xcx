@@ -9,18 +9,28 @@
           :src="avatarPreview || '/static/avatar-default.png'"
           mode="aspectFill"
         />
-        <button class="mini" size="mini" @click="chooseAvatar">更换头像</button>
+        <button class="mini" size="mini" :loading="avatarUploading" :disabled="avatarUploading || saving" @click="chooseAvatar">更换头像</button>
+        <button class="mini" size="mini" :disabled="avatarUploading || saving" @click="clearAvatar">清除头像</button>
       </view>
 
       <text class="label">昵称</text>
       <input class="input" v-model="nickname" placeholder="请输入昵称" maxlength="20" />
 
-      <button class="btn" type="primary" :loading="saving" @click="save">保存</button>
+      <button class="btn" type="primary" :loading="saving" :disabled="saving || avatarUploading" @click="save">保存</button>
     </view>
   </view>
 </template>
 
 <script>
+import {
+  applyNewToken,
+  clearAuthStorage,
+  getAuthToken,
+  isAuthExpiredResult,
+  resolveCloudFileToUrl
+} from '@/utils/auth.js'
+import { addPendingCleanup, getPendingCleanup, removePendingCleanup } from '@/utils/pending-cleanup.js'
+
 export default {
   data() {
     return {
@@ -29,6 +39,8 @@ export default {
       avatarPreview: '',    // 展示用 URL（本地临时/云端 temp/http）
       avatarChanged: false, // 是否真的改过头像
       pendingAvatarFileIds: [],
+      avatarCleanupType: '',
+      avatarUploading: false,
       saving: false
     }
   },
@@ -37,53 +49,45 @@ export default {
     // 1) 缓存秒开
     this.nickname = uni.getStorageSync('uni_id_nickname') || ''
     this.avatarPreview = uni.getStorageSync('uni_id_avatar') || ''
+    const cachedUid = uni.getStorageSync('uni_id_uid') || ''
+    this.avatarCleanupType = cachedUid ? `avatar:${cachedUid}` : ''
 
     // 2) 校验 token + 拉云端资料
     await this.loadFromCloud()
+    if (!this.avatarCleanupType) return
+    this.pendingAvatarFileIds = getPendingCleanup(this.avatarCleanupType)
+    await this.cleanupPendingAvatars()
   },
 
   onUnload() {
-    this.cleanupPendingAvatars()
+    // 保存/上传期间不发起删除请求，避免清理先于资料写库完成。
+    // 待清理 fileID 已持久化，之后进入页面时会重新校验引用并清理。
+    if (!this.saving && !this.avatarUploading) {
+      this.cleanupPendingAvatars()
+    }
+  },
+
+  onBackPress() {
+    if (this.saving || this.avatarUploading) {
+      uni.showToast({
+        title: this.saving ? '正在保存，请稍候' : '头像上传中，请稍候',
+        icon: 'none'
+      })
+      return true
+    }
+    return false
   },
 
   methods: {
-    isAuthExpiredResult(r) {
-      const code = r?.code
-      const msg = String(r?.msg || '')
-      if (code === 401) return true
-      if (/token|未登录|登录|失效|过期|unauth|auth/i.test(msg)) return true
-      return false
-    },
-
     kickToLogin() {
-      uni.removeStorageSync('uni_id_token')
-      uni.removeStorageSync('uni_id_uid')
-      uni.removeStorageSync('uni_id_nickname')
-      uni.removeStorageSync('uni_id_avatar')
+      clearAuthStorage()
 
       uni.showToast({ title: '登录已失效，请重新登录', icon: 'none' })
       setTimeout(() => uni.navigateBack(), 300)
     },
 
-    async resolveAvatarToUrl(avatarValue) {
-      if (!avatarValue) return ''
-
-      if (/^https?:\/\//i.test(avatarValue)) return avatarValue
-
-      if (/^cloud:\/\//i.test(avatarValue)) {
-        try {
-          const tmp = await uniCloud.getTempFileURL({ fileList: [avatarValue] })
-          return tmp.fileList?.[0]?.tempFileURL || ''
-        } catch (e) {
-          console.log('getTempFileURL failed:', e)
-          return ''
-        }
-      }
-      return ''
-    },
-
     async loadFromCloud() {
-      const token = uni.getStorageSync('uni_id_token')
+      const token = getAuthToken()
       if (!token) {
         this.kickToLogin()
         return
@@ -95,8 +99,9 @@ export default {
           data: { token }
         })
         const r = res.result || {}
+        applyNewToken(r)
 
-        if (this.isAuthExpiredResult(r)) {
+        if (isAuthExpiredResult(r)) {
           this.kickToLogin()
           return
         }
@@ -104,6 +109,11 @@ export default {
         if (r.code !== 0) {
           console.log('get-user-profile failed:', r)
           return
+        }
+
+        if (r.uid) {
+          uni.setStorageSync('uni_id_uid', r.uid)
+          this.avatarCleanupType = `avatar:${r.uid}`
         }
 
         const profile = r.profile || {}
@@ -119,7 +129,7 @@ export default {
           this.avatarFileId = '' // 云端是 URL（如 qlogo）就不写
         }
 
-        const url = await this.resolveAvatarToUrl(cloudAvatar)
+        const url = await resolveCloudFileToUrl(cloudAvatar)
         if (url) this.avatarPreview = url
         else if (!cloudAvatar) this.avatarPreview = '' // 云端明确为空才清空
 
@@ -132,7 +142,13 @@ export default {
     },
 
     async chooseAvatar() {
+      if (this.avatarUploading || this.saving) return
+
+      const previousPreview = this.avatarPreview
+      const previousFileId = this.avatarFileId
+      const previousChanged = this.avatarChanged
       try {
+        this.avatarUploading = true
         const chooseRes = await new Promise((resolve, reject) => {
           uni.chooseImage({
             count: 1,
@@ -154,6 +170,7 @@ export default {
         const ext = (localPath.match(/\.\w+$/)?.[0] || '.jpg').toLowerCase()
         const uid = uni.getStorageSync('uni_id_uid')
         if (!uid) throw new Error('登录已失效，请重新登录')
+        if (!this.avatarCleanupType) this.avatarCleanupType = `avatar:${uid}`
         const cloudPath = `avatar/${uid}/${Date.now()}_${Math.random().toString(16).slice(2)}${ext}`
 
         const upload = await uniCloud.uploadFile({
@@ -165,24 +182,48 @@ export default {
         if (!this.avatarFileId) throw new Error('头像上传失败')
         this.avatarChanged = true
         this.pendingAvatarFileIds.push(this.avatarFileId)
+        addPendingCleanup(this.avatarCleanupType, [this.avatarFileId])
 
         // 将 fileID 转 temp url（避免本地临时路径失效）
         if (this.avatarFileId) {
-          const tmp = await uniCloud.getTempFileURL({ fileList: [this.avatarFileId] })
-          const url = tmp.fileList?.[0]?.tempFileURL || ''
+          let url = ''
+          try {
+            const tmp = await uniCloud.getTempFileURL({ fileList: [this.avatarFileId] })
+            url = tmp.fileList?.[0]?.tempFileURL || ''
+          } catch (e) {
+            console.error('resolve uploaded avatar failed:', e)
+          }
           if (url) this.avatarPreview = url
         }
 
         uni.showToast({ title: '头像已上传', icon: 'success' })
       } catch (e) {
-        console.error(e)
-        uni.showToast({ title: '已取消', icon: 'none' })
+        this.avatarPreview = previousPreview
+        this.avatarFileId = previousFileId
+        this.avatarChanged = previousChanged
+        const message = String(e?.errMsg || e?.message || '')
+        if (/cancel/i.test(message)) {
+          uni.showToast({ title: '已取消', icon: 'none' })
+        } else {
+          console.error(e)
+          uni.showToast({ title: e?.message || '头像上传失败，请重试', icon: 'none' })
+        }
       } finally {
         uni.hideLoading()
+        this.avatarUploading = false
       }
     },
 
+    clearAvatar() {
+      if (this.avatarUploading || this.saving) return
+      this.avatarFileId = ''
+      this.avatarPreview = ''
+      this.avatarChanged = true
+    },
+
     async save() {
+      if (this.saving || this.avatarUploading) return
+
       const name = (this.nickname || '').trim()
       if (!name) {
         uni.showToast({ title: '昵称不能为空', icon: 'none' })
@@ -193,7 +234,7 @@ export default {
         return
       }
 
-      const token = uni.getStorageSync('uni_id_token')
+      const token = getAuthToken()
       if (!token) {
         this.kickToLogin()
         return
@@ -205,7 +246,7 @@ export default {
 
         // ✅ 最干净：只在“换过头像且有 fileID”时才传 avatar，避免任何误覆盖
         const data = { token, nickname: name }
-        if (this.avatarChanged && this.avatarFileId) {
+        if (this.avatarChanged) {
           data.avatar = this.avatarFileId
         }
         const pendingToRemove = this.pendingAvatarFileIds.filter((id) => id !== this.avatarFileId)
@@ -216,14 +257,22 @@ export default {
           data
         })
         const r = res.result || {}
+        applyNewToken(r)
 
-        if (this.isAuthExpiredResult(r)) {
+        if (isAuthExpiredResult(r)) {
           this.kickToLogin()
           return
         }
         if (r.code !== 0) throw new Error(r.msg || '保存失败')
 
-        this.pendingAvatarFileIds = []
+        const failed = r.cleanup?.queued === true
+          ? []
+          : (Array.isArray(r.cleanup?.failedFileIDs) ? r.cleanup.failedFileIDs : [])
+        const currentCommitted = this.avatarFileId ? [this.avatarFileId] : []
+        const confirmed = pendingToRemove.filter((id) => !failed.includes(id))
+        removePendingCleanup(this.avatarCleanupType, [...confirmed, ...currentCommitted])
+        addPendingCleanup(this.avatarCleanupType, failed)
+        this.pendingAvatarFileIds = getPendingCleanup(this.avatarCleanupType)
 
         // ✅ 更新缓存，保证上一页立刻刷新
         uni.setStorageSync('uni_id_nickname', name)
@@ -247,17 +296,27 @@ export default {
 
     async cleanupPendingAvatars() {
       const ids = [...new Set(this.pendingAvatarFileIds)].filter(Boolean)
-      if (!ids.length) return
+      if (!ids.length || !this.avatarCleanupType) return
 
-      this.pendingAvatarFileIds = []
-      const token = uni.getStorageSync('uni_id_token')
+      addPendingCleanup(this.avatarCleanupType, ids)
+      const token = getAuthToken()
       if (!token) return
 
       try {
-        await uniCloud.callFunction({
+        const res = await uniCloud.callFunction({
           name: 'update-user-profile',
           data: { token, cleanupAvatarFileIds: ids }
         })
+        const result = res.result || {}
+        applyNewToken(result)
+        if (result.code !== 0) return
+
+        const failed = new Set(result.cleanup?.queued === true
+          ? []
+          : (Array.isArray(result.cleanup?.failedFileIDs) ? result.cleanup.failedFileIDs : []))
+        const confirmed = ids.filter((id) => !failed.has(id))
+        removePendingCleanup(this.avatarCleanupType, confirmed)
+        this.pendingAvatarFileIds = getPendingCleanup(this.avatarCleanupType)
       } catch (e) {
         console.error('cleanup pending avatar files failed:', e)
       }

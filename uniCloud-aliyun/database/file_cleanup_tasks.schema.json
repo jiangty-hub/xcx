@@ -11,6 +11,14 @@
     "_id": {
       "description": "ID, 系统自动生成"
     },
+    "taskType": {
+      "bsonType": "string",
+      "description": "清理任务类型：food 或 avatar；旧任务省略时按 food 处理"
+    },
+    "ownerUid": {
+      "bsonType": "string",
+      "description": "头像清理任务所属用户 UID"
+    },
     "fileIDs": {
       "bsonType": "array",
       "description": "待清理的云存储文件"

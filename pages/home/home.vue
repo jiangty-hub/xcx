@@ -4,14 +4,30 @@
 		<view class="search-box">
 			<my-search @click="gotoSearch"></my-search>
 		</view>
+		<view v-if="homeLoading" class="home-state">首页加载中...</view>
+		<view v-else-if="homeError" class="home-state error-state">
+			<text>{{ homeError }}</text>
+			<button size="mini" @click="loadHome">重试</button>
+		</view>
+		<view
+			v-else-if="!homePartialError && !swiperList.length && !navList.length && !floorList.length"
+			class="home-state"
+		>
+			暂无首页内容
+		</view>
+		<block v-else>
+		<view v-if="homePartialError" class="partial-error">
+			<text>{{ homePartialError }}</text>
+			<button size="mini" @click="loadHome">重试</button>
+		</view>
 		<!--轮播图区域-->
-		<swiper :indicator-dots="true" :autoplay="true" :interval="3000" :duration="1000" :circular="true">
+		<swiper v-if="swiperList.length" :indicator-dots="true" :autoplay="true" :interval="3000" :duration="1000" :circular="true">
 			<swiper-item class="swiper-item" v-for="(item, i) in swiperList" :key="i">
 				<image :src="item.image_src"></image>
 			</swiper-item>
 		</swiper>
 		<!--分类导航区域-->
-		<view class="nav-list">
+		<view class="nav-list" v-if="navList.length">
 			<view class="nav-item" v-for="(item, i) in navList" :key="i" @click="nacClickHandler(item)">
 				<view class="nav-icon-box">
 					<image class="nav-icon" :src="item.icon"></image>
@@ -20,7 +36,7 @@
 			</view>
 		</view>
 		<!--拿手好菜区域-->
-		<view class="floor-list">
+		<view class="floor-list" v-if="floorList.length">
 			<!--拿手好菜名字-->
 			<text class="floor-text">◆拿手好菜</text>
 			<!--拿手好菜数组-->
@@ -40,6 +56,7 @@
 				</view>
 			</view>
 		</view>
+		</block>
 	</view>
 </template>
 
@@ -52,47 +69,66 @@
 				//分类导航数组
 				navList: [],
 				//拿手菜系数组
-				floorList: []
+				floorList: [],
+				homeLoading: true,
+				homeError: '',
+				homePartialError: ''
 			}
 		},
 		onLoad() {
-			this.getBanner()
-			this.getIcon()
-			this.getFloor()
+			this.loadHome()
 		},
 		methods: {
-		  getBanner() {
-		    uniCloud.callFunction({
-		      name: 'getBanner',
-		      success: (res) => {
-				this.swiperList = res.result.data
-		      },
-		      fail: (err) => {
-		        this.$showError(err, '轮播图加载失败', 1500)
-		      }
-		    })
+		  async loadHome() {
+			this.homeLoading = true
+			this.homeError = ''
+			this.homePartialError = ''
+			try {
+				const results = await Promise.allSettled([
+					this.getBanner(),
+					this.getIcon(),
+					this.getFloor()
+				])
+				const targets = ['swiperList', 'navList', 'floorList']
+				const labels = ['轮播图', '分类导航', '拿手好菜']
+				const failedLabels = []
+
+				results.forEach((result, index) => {
+					if (result.status === 'fulfilled') {
+						this[targets[index]] = result.value
+					} else {
+						this[targets[index]] = []
+						failedLabels.push(labels[index])
+						console.error(`${labels[index]} load failed:`, result.reason)
+					}
+				})
+
+				if (failedLabels.length === results.length) {
+					this.homeError = '首页加载失败'
+				} else if (failedLabels.length) {
+					this.homePartialError = `${failedLabels.join('、')}加载失败`
+				}
+			} catch (err) {
+				console.error('load home failed:', err)
+				this.homeError = err?.message || '首页加载失败'
+			} finally {
+				this.homeLoading = false
+			}
 		  },
-		  getIcon() {
-		    uniCloud.callFunction({
-		      name: 'getIcon',
-		      success: (res) => {
-		  		this.navList = res.result.data
-		      },
-		      fail: (err) => {
-		        this.$showError(err, '图标加载失败', 1500)
-		      }
-		    })
+		  async getBanner() {
+		    const res = await uniCloud.callFunction({ name: 'getBanner' })
+			if (res.result?.code !== 0) throw new Error(res.result?.msg || '轮播图加载失败')
+			return Array.isArray(res.result?.data) ? res.result.data : []
 		  },
-		  getFloor() {
-		    uniCloud.callFunction({
-		      name: 'getFloor',
-		      success: (res) => {
-		  		this.floorList = Array.isArray(res.result?.data) ? res.result.data : []
-		      },
-		      fail: (err) => {
-		        this.$showError(err, '图片加载失败', 1500)
-		      }
-		    })
+		  async getIcon() {
+		    const res = await uniCloud.callFunction({ name: 'getIcon' })
+			if (res.result?.code !== 0) throw new Error(res.result?.msg || '图标加载失败')
+			return Array.isArray(res.result?.data) ? res.result.data : []
+		  },
+		  async getFloor() {
+		    const res = await uniCloud.callFunction({ name: 'getFloor' })
+			if (res.result?.code !== 0) throw new Error(res.result?.msg || '图片加载失败')
+			return Array.isArray(res.result?.data) ? res.result.data : []
 		  },
 		  getFloorImage(group, index) {
 		  	const defaultImg = '/static/cover-default.png'
@@ -101,14 +137,21 @@
 		  	if (!item || !item.image_src) return defaultImg
 		  	return item.image_src
 		  },
-		  nacClickHandler(item) {
-		  	//把参数存储到本地
-		  	wx.setStorageSync('selectedCategory', item.name)
-		  	//跳转 tabBar 页面
-		  	uni.switchTab({
-		  		url: '/pages/category/category'
-		  	});
-		  },
+          nacClickHandler(item) {
+            // 使用稳定的分类 ID 跳转，避免分类改名后无法匹配。
+            const cateId = item?.cate_id
+            if (cateId === undefined || cateId === null || cateId === '') {
+              uni.showToast({ title: '该分类缺少ID', icon: 'none' })
+              return
+            }
+            uni.setStorageSync('selectedCategoryId', cateId)
+            // 清掉旧版本可能遗留的名称缓存。
+            uni.removeStorageSync('selectedCategory')
+            //跳转 tabBar 页面
+            uni.switchTab({
+              url: '/pages/category/category'
+            });
+          },
 		  gotoSearch() {
 			  uni.navigateTo({
 			  	url: '/subpkg/search/search'
@@ -194,5 +237,26 @@ swiper {
 	height: 200rpx;
 	border-radius: 16rpx;
 	object-fit: cover;
+}
+.home-state {
+	min-height: 600rpx;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 24rpx;
+	color: #999;
+}
+.error-state {
+	color: #666;
+}
+.partial-error {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 16rpx 24rpx;
+	background: #fff7e6;
+	color: #ad6800;
+	font-size: 26rpx;
 }
 </style>
