@@ -4,18 +4,19 @@ const fs = require('node:fs')
 const vm = require('node:vm')
 const { test } = require('node:test')
 const path = require('node:path')
-const cloudDir = path.join(__dirname, '../uniCloud-aliyun/cloudfunctions/update-user-profile')
+const cloudDir = path.join(__dirname, '../uniCloud-alipay/cloudfunctions/update-user-profile')
 const helpers = require(path.join(cloudDir, 'avatar-files.js'))
 const { saveProfileSafely, excludeReferencedAvatars } = helpers
-const host = 'https://mp-e3a48079-7f55-4c65-8f6c-9d757e567f86.cdn.bspapp.com'
+const host = 'https://env-00jy6ttlqgid.normal.cloudstatic.cn'
 const avatar = host + '/avatar/u1/new.jpg'
 const oldAvatar = host + '/avatar/u1/old.jpg'
-const stateKey = createHash('sha256').update(avatar).digest('hex')
+const storage = require(path.join(cloudDir, 'storage-files.js'))
+const stateKey = createHash('sha256').update(storage.fileID(avatar)).digest('hex')
 const clone = value => value === undefined ? undefined : structuredClone(value)
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r }); return {promise, resolve} }
 
 // 内存 MVCC 替身：读取快照、提交检查冲突、原子发布写入。
-// 仅验证控制流/交错，不替代阿里云真实事务集成测试。
+// 仅验证控制流/交错，不替代支付宝云真实事务集成测试。
 class Database {
   constructor() { this.rows = new Map(); this.versions = new Map(); this.nextCommit = null }
   put(collection, id, value) { const key=collection+'/'+id; this.rows.set(key,clone(value));this.versions.set(key,(this.versions.get(key)||0)+1) }
@@ -25,7 +26,7 @@ class Database {
     const db=this
     return {
       doc(id) { return { field(){return this}, get:async()=>({data:db.get(collection,id)?[db.get(collection,id)]:[]}) } },
-      where(condition) { return {limit(){return this},get:async()=>({data:[...db.rows.entries()].filter(([key,row])=>key.startsWith(collection+'/') && Object.entries(condition).every(([field,value])=>value?.values?Array.isArray(row[field])&&row[field].some(x=>value.values.includes(x)):row[field]===value)).map(([,row])=>clone(row))})} },
+      where(condition) { return {limit(){return this},get:async()=>({data:[...db.rows.entries()].filter(([key,row])=>key.startsWith(collection+'/') && Object.entries(condition).every(([field,value])=>value?.values?(Array.isArray(row[field])?row[field].some(x=>value.values.includes(x)):value.values.includes(row[field])):row[field]===value)).map(([,row])=>clone(row))})} },
       async add(row) { db.put(collection, row._id || String(db.rows.size),row) }
     }
   }
@@ -46,6 +47,50 @@ class Database {
   }
 }
 function database(current='') { const db=new Database();db.put('uni-id-users','u1',{avatar:current,nickname:'before'});return db }
+
+test('同一头像切换 HTTPS/cloud 形式仍被保护',async()=>{
+  for(const [current,candidate] of [[avatar,storage.fileID(avatar)],[storage.fileID(avatar),avatar]]) {
+    const db=database(current)
+    assert.deepEqual((await excludeReferencedAvatars(db,[candidate])).referenced,[candidate])
+  }
+})
+
+test('旧 HTTPS 和迁移前阿里云地址的 deleting 状态仍阻止新形式保存',async()=>{
+  for(const alias of storage.aliases(avatar)) {
+    const db=database(oldAvatar),key=createHash('sha256').update(alias).digest('hex')
+    db.put('avatar_file_states',key,{fileID:alias,status:'deleting',revision:1})
+    await assert.rejects(saveProfileSafely(db,'u1',{avatar:storage.fileID(avatar)}),{code:409})
+    assert.equal(db.get('uni-id-users','u1').avatar,oldAvatar)
+  }
+})
+
+test('旧 active 状态按统一 ID 保存，保留旧记录',async()=>{
+  const db=database(),key=createHash('sha256').update(avatar).digest('hex')
+  db.put('avatar_file_states',key,{fileID:avatar,status:'active',revision:4})
+  await saveProfileSafely(db,'u1',{avatar})
+  assert.equal(db.get('avatar_file_states',stateKey).fileID,storage.fileID(avatar))
+  assert.equal(db.get('avatar_file_states',key).revision,4)
+})
+
+test('跨地址形式并发：清理先提交，保存事务冲突，且以后保存被拒绝',async()=>{
+  const db=database(oldAvatar),entered=deferred(),release=deferred()
+  db.nextCommit=async()=>{entered.resolve();await release.promise}
+  const saving=saveProfileSafely(db,'u1',{avatar}),rejection=assert.rejects(saving,/transaction conflict/)
+  await entered.promise
+  assert.deepEqual((await excludeReferencedAvatars(db,[storage.fileID(avatar)])).deletable,[storage.fileID(avatar)])
+  release.resolve();await rejection
+  await assert.rejects(saveProfileSafely(db,'u1',{avatar}),{code:409})
+})
+
+test('跨地址形式并发：保存先提交，清理事务冲突',async()=>{
+  const db=database(),entered=deferred(),release=deferred()
+  db.nextCommit=async()=>{entered.resolve();await release.promise}
+  const cleaning=excludeReferencedAvatars(db,[avatar]),rejection=assert.rejects(cleaning,/transaction conflict/)
+  await entered.promise
+  await saveProfileSafely(db,'u1',{avatar:storage.fileID(avatar)})
+  release.resolve();await rejection
+  assert.deepEqual((await excludeReferencedAvatars(db,[avatar])).referenced,[avatar])
+})
 
 test('保存先提交：当前头像被保护，清理列表为空',async()=>{
   const db=database();await saveProfileSafely(db,'u1',{avatar,nickname:'after'})
@@ -99,7 +144,7 @@ test('已有 active 状态也通过写 revision 与清理互斥',async()=>{
   await excludeReferencedAvatars(db,[avatar]);await assert.rejects(saveProfileSafely(db,'u1',{avatar}),{code:409})
 })
 function endpoint(db,deleted){
-  const ctx={exports:{},console,require:name=>name==='uni-id-common'?{createInstance:()=>({checkToken:async()=>({uid:'u1'})})}:name==='./avatar-files'?helpers:require(name),uniCloud:{database:()=>db,deleteFile:async({fileList})=>deleted.push(...fileList)}}
+  const ctx={exports:{},console,require:name=>name==='uni-id-common'?{createInstance:()=>({checkToken:async()=>({uid:'u1'})})}:name==='./avatar-files'?helpers:name==='./storage-files'?storage:require(name),uniCloud:{database:()=>db,deleteFile:async({fileList})=>{deleted.push(...fileList);return {fileList:fileList.map(fileID=>({fileID}))}}}}
   vm.runInNewContext(fs.readFileSync(path.join(cloudDir,'index.js'),'utf8'),ctx);return ctx.exports.main
 }
 test('真实云函数入口：模拟保存挂起、清理抢先，不会成功写入被删文件',async()=>{
@@ -107,7 +152,7 @@ test('真实云函数入口：模拟保存挂起、清理抢先，不会成功�
   db.nextCommit=async()=>{entered.resolve();await release.promise}
   const saving=call({token:'test',avatar,nickname:'after'},{});const rejection=assert.rejects(saving,/transaction conflict/)
   await entered.promise;const result=await call({token:'test',cleanupAvatarFileIds:[avatar]},{});assert.equal(result.code,0)
-  release.resolve();await rejection;assert(deleted.includes(avatar));assert.equal(db.get('uni-id-users','u1').avatar,oldAvatar)
+  release.resolve();await rejection;assert(deleted.includes(storage.fileID(avatar)));assert.equal(db.get('uni-id-users','u1').avatar,oldAvatar)
   assert.equal((await call({token:'test',avatar,nickname:'after'},{})).code,409)
 })
 test('缺少用户不能报告保存成功',async()=>{

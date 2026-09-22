@@ -7,7 +7,7 @@ const vm = require('node:vm')
 function load(name) {
   const calls = { collections: 0, reads: 0, writes: 0, deletedFiles: [] }
   let logsRemoved = false
-  const fileID = 'https://mp-e3a48079-7f55-4c65-8f6c-9d757e567f86.cdn.bspapp.com/foods/test.jpg'
+  const fileID = 'https://env-00jy6ttlqgid.normal.cloudstatic.cn/foods/test.jpg'
   const db = {
     command: { in: values => ({ values }), lt: value => ({ value }) },
     collection(collection) {
@@ -37,15 +37,16 @@ function load(name) {
         isOwnedAvatarFile() { throw new Error('unexpected avatar path') },
         excludeReferencedAvatars() { throw new Error('unexpected avatar path') }
       }
+      if (name === './storage-files') return require('../uniCloud-alipay/cloudfunctions/retry-file-cleanup/storage-files')
       if (name === 'url') return require('node:url')
       throw new Error('unexpected dependency: ' + name)
     },
     uniCloud: {
       database: () => db,
-      async deleteFile({ fileList }) { calls.deletedFiles.push(...fileList) }
+      async deleteFile({ fileList }) { calls.deletedFiles.push(...fileList); return {fileList:fileList.map(fileID=>({fileID}))} }
     }
   }
-  const file = path.join(__dirname, '../uniCloud-aliyun/cloudfunctions', name, 'index.js')
+  const file = path.join(__dirname, '../uniCloud-alipay/cloudfunctions', name, 'index.js')
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file })
   return { main: sandbox.exports.main, calls, fileID }
 }
@@ -88,7 +89,7 @@ for (const name of ['clean-uniid-log', 'retry-file-cleanup']) {
         assert.equal(result.processed, 1)
         assert.equal(result.completed, 1)
         assert.equal(result.failed, 0)
-        assert.deepEqual(calls.deletedFiles, [fileID])
+        assert.deepEqual(calls.deletedFiles, [fileID.replace('https://env-00jy6ttlqgid.normal.cloudstatic.cn', 'cloud://env-00jy6ttlqgid')])
       }
     })
   }

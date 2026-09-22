@@ -1,5 +1,5 @@
 'use strict'
-const { URL } = require('url')
+const storage = require('./storage-files')
 const { createHash } = require('crypto')
 const db = uniCloud.database()
 const uniID = require('uni-id-common')
@@ -301,61 +301,12 @@ async function attachVerifiedCategory(data) {
   return data
 }
 
-// 本项目阿里云文件的实际地址；更换服务空间时需同步更新两个清理云函数。
-const FOOD_STORAGE_HOST = 'mp-e3a48079-7f55-4c65-8f6c-9d757e567f86.cdn.bspapp.com'
+const isFoodCoverFile = storage.isFoodCoverFile
 
-function isFoodCoverFile(fileID) {
-  if (typeof fileID !== 'string') return false
-  if (fileID.startsWith('cloud://')) return fileID.includes('/foods/')
-
-  try {
-    const url = new URL(fileID)
-    // 仅接受本空间的原始文件地址，避免临时签名或地址别名绕过引用检查。
-    if (url.protocol !== 'https:' || url.hostname !== FOOD_STORAGE_HOST ||
-        url.username || url.password || url.port || url.search || url.hash || url.href !== fileID) return false
-    return /^\/(?:cloudstorage|foods)\/.+/.test(url.pathname) && !url.pathname.endsWith('/')
-  } catch (e) {
-    return false
-  }
-}
-
-async function deleteCloudFiles(fileIDs, { foodOnly = false } = {}) {
+async function deleteCloudFiles(fileIDs) {
   const source = Array.isArray(fileIDs) ? fileIDs : []
-  const storageFiles = source.filter(id => typeof id === 'string' && (/^cloud:\/\//.test(id) || /^https?:\/\//i.test(id)))
-  const filtered = foodOnly ? storageFiles.filter(isFoodCoverFile) : storageFiles
-  const list = [...new Set(filtered)]
-  const skipped = source.length - filtered.length
-
-  if (!list.length) return { deleted: 0, deletedFileIDs: [], skipped, error: '', failedFileIDs: [] }
-
-  let deleted = 0
-  const deletedFileIDs = []
-  const failedFileIDs = []
-  const errors = []
-  const requestIds = []
-
-  for (const batch of chunkList(list)) {
-    try {
-      const res = await uniCloud.deleteFile({ fileList: batch })
-      deleted += batch.length
-      deletedFileIDs.push(...batch)
-      if (res?.requestId) requestIds.push(res.requestId)
-    } catch (e) {
-      console.error('delete cloud files failed:', e)
-      failedFileIDs.push(...batch)
-      errors.push(e?.message || '云存储删除失败')
-    }
-  }
-
-  return {
-    deleted,
-    deletedFileIDs,
-    skipped,
-    error: [...new Set(errors)].join('; '),
-    failedFileIDs,
-    requestId: requestIds[0] || '',
-    requestIds
-  }
+  const filtered = source.filter(isFoodCoverFile)
+  return { ...await storage.deleteFiles(uniCloud, filtered), skipped: source.length - filtered.length }
 }
 
 async function enqueueFileCleanup(fileIDs, reason, error) {
@@ -386,56 +337,7 @@ async function enqueueFileCleanup(fileIDs, reason, error) {
 }
 
 async function excludeReferencedFoodCovers(fileIDs) {
-  const list = [...new Set((Array.isArray(fileIDs) ? fileIDs : []).filter(isFoodCoverFile))]
-  if (!list.length) return { deletable: [], referenced: [] }
-
-  const referenced = new Set()
-  const foods = db.collection('foods')
-
-  for (const batch of chunkList(list)) {
-    let offset = 0
-    while (true) {
-      const res = await foods
-        .where({ cover_images: db.command.in(batch) })
-        .field({ cover_images: true })
-        .skip(offset)
-        .limit(100)
-        .get()
-
-      const docs = res.data || []
-      docs.forEach((doc) => {
-        const covers = Array.isArray(doc.cover_images) ? doc.cover_images : []
-        covers.forEach((fileID) => {
-          if (batch.includes(fileID)) referenced.add(fileID)
-        })
-      })
-
-      if (docs.length < 100) break
-      offset += docs.length
-    }
-
-    // cloudstorage 同时存放菜品和头像，清理前也保护用户当前使用的头像。
-    let userOffset = 0
-    while (true) {
-      const res = await db.collection('uni-id-users')
-        .where({ avatar: db.command.in(batch) })
-        .field({ avatar: true })
-        .skip(userOffset)
-        .limit(100)
-        .get()
-      const users = res.data || []
-      users.forEach((user) => {
-        if (batch.includes(user.avatar)) referenced.add(user.avatar)
-      })
-      if (users.length < 100) break
-      userOffset += users.length
-    }
-  }
-
-  return {
-    deletable: list.filter((fileID) => !referenced.has(fileID)),
-    referenced: list.filter((fileID) => referenced.has(fileID))
-  }
+  return storage.excludeReferencedFoodCovers(db, Array.isArray(fileIDs) ? fileIDs : [])
 }
 
 async function deleteCoverFiles(coverImages, reason) {
@@ -443,7 +345,7 @@ async function deleteCoverFiles(coverImages, reason) {
     .filter((id) => typeof id === 'string' && id))]
   const skippedFileIDs = candidates.filter((id) => !isFoodCoverFile(id))
   const { deletable, referenced } = await excludeReferencedFoodCovers(candidates)
-  const cleanup = await deleteCloudFiles(deletable, { foodOnly: true })
+  const cleanup = await deleteCloudFiles(deletable)
   cleanup.protectedFileIDs = referenced
   cleanup.skippedFileIDs = skippedFileIDs
   cleanup.skipped = skippedFileIDs.length

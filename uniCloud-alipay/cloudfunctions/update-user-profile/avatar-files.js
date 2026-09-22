@@ -1,11 +1,11 @@
 'use strict'
+const storage = require('./storage-files')
 const { URL } = require('url')
 const { createHash } = require('crypto')
-const STORAGE_HOST = 'mp-e3a48079-7f55-4c65-8f6c-9d757e567f86.cdn.bspapp.com'
 const FILE_STATES = 'avatar_file_states'
 
 function fileKey(fileID) {
-  return createHash('sha256').update(fileID).digest('hex')
+  return createHash('sha256').update(storage.fileID(fileID) || fileID).digest('hex')
 }
 
 function firstDoc(result) {
@@ -36,10 +36,17 @@ async function saveProfileSafely(db, uid, updateData) {
         const states = transaction.collection(FILE_STATES)
         const id = fileKey(fileID)
         const state = firstDoc(await states.doc(id).get())
+        // 兼容迁移前按原始 HTTPS 地址计算的状态键；待删除标记不可被新键绕过。
+        for (const alias of storage.aliases(fileID)) {
+          const legacyKey = createHash('sha256').update(alias).digest('hex')
+          if (legacyKey === id) continue
+          const legacy = firstDoc(await states.doc(legacyKey).get())
+          if (legacy && legacy.status !== 'active') throw profileError(409, '该头像已进入清理流程，请重新上传头像')
+        }
         if (state && state.status !== 'active') {
           throw profileError(409, '该头像已进入清理流程，本次资料未保存，请重新上传头像')
         }
-        const data = { ownerUid: uid, fileID, status: 'active', updatedAt: Date.now() }
+        const data = { ownerUid: uid, fileID: storage.fileID(fileID), status: 'active', updatedAt: Date.now() }
         if (state) {
           // 必须实际写入，不能只检查状态，否则无法与清理事务互斥。
           await states.doc(id).update({ ...data, revision: Number(state.revision || 0) + 1 })
@@ -73,11 +80,11 @@ async function claimAvatarDeletion(db, fileID) {
     const id = fileKey(fileID)
     const state = firstDoc(await states.doc(id).get())
     const user = firstDoc(await transaction.collection('uni-id-users').doc(uid).get())
-    if (user?.avatar === fileID) {
+    if (storage.sameFile(user?.avatar, fileID)) {
       await transaction.rollback()
       return false
     }
-    const data = { ownerUid: uid, fileID, status: 'deleting', updatedAt: Date.now() }
+    const data = { ownerUid: uid, fileID: storage.fileID(fileID), status: 'deleting', updatedAt: Date.now() }
     if (state) {
       await states.doc(id).update({ ...data, revision: Number(state.revision || 0) + 1 })
     } else {
@@ -94,31 +101,20 @@ async function claimAvatarDeletion(db, fileID) {
 }
 
 // 两个云函数各自携带此文件；修改规则时同步更新并部署。
-function isOwnedAvatarFile(fileID, uid) {
-  if (typeof fileID !== 'string' || typeof uid !== 'string' || !/^[\w-]+$/.test(uid)) return false
-  try {
-    const url = new URL(fileID)
-    if (url.username || url.password || url.port || url.search || url.hash || url.href !== fileID) return false
-    if (url.protocol === 'https:') {
-      if (url.hostname !== STORAGE_HOST) return false
-    } else if (url.protocol !== 'cloud:' || !url.hostname) return false
-    const prefix = `/avatar/${uid}/`
-    return url.pathname.startsWith(prefix) && /^[\w.-]+$/.test(url.pathname.slice(prefix.length)) &&
-      !['.', '..'].includes(url.pathname.slice(prefix.length))
-  } catch (e) {
-    return false
-  }
-}
+const isOwnedAvatarFile = storage.isOwnedAvatarFile
 
 // 兼容曾被其他用户或菜品引用的头像；检查失败时由调用方保留重试。
 async function excludeReferencedAvatars(db, fileIDs) {
   const referenced = []
   const deletable = []
   for (const id of fileIDs) {
-    const users = await db.collection('uni-id-users').where({ avatar: id }).limit(1).get()
-    const foods = await db.collection('foods').where({ cover_images: db.command.in([id]) }).limit(1).get()
-    const legacyFoods = await db.collection('foods').where({ images: db.command.in([id]) }).limit(1).get()
-    if (users.data?.length || foods.data?.length || legacyFoods.data?.length) {
+    const forms = storage.aliases(id)
+    if (!forms.length) throw new Error('头像地址无效')
+    const users = await db.collection('uni-id-users').where({ avatar: db.command.in(forms) }).limit(1).get()
+    const foods = await db.collection('foods').where({ cover_images: db.command.in(forms) }).limit(1).get()
+    const legacyFoods = await db.collection('foods').where({ images: db.command.in(forms) }).limit(1).get()
+    if (![users, foods, legacyFoods].every(res => Array.isArray(res?.data))) throw new Error('头像引用查询结果未确认')
+    if (users.data.length || foods.data.length || legacyFoods.data.length) {
       referenced.push(id)
     } else if (await claimAvatarDeletion(db, id)) {
       deletable.push(id)

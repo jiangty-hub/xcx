@@ -1,4 +1,5 @@
 'use strict'
+const storage = require('./storage-files')
 const uniID = require('uni-id-common')
 const { isOwnedAvatarFile, excludeReferencedAvatars, saveProfileSafely } = require('./avatar-files')
 
@@ -63,11 +64,11 @@ exports.main = async (event, context) => {
     const owned = getOwnedAvatarFileIDs(source)
     const result = {
       deleted: 0, deletedFileIDs: [], failedFileIDs: [], queuedFileIDs: [],
-      protectedFileIDs: source.filter((id) => id === protectedAvatar),
-      skippedFileIDs: source.filter((id) => id !== protectedAvatar && !owned.includes(id)),
+      protectedFileIDs: source.filter((id) => storage.sameFile(id, protectedAvatar)),
+      skippedFileIDs: source.filter((id) => !storage.sameFile(id, protectedAvatar) && !owned.includes(id)),
       confirmedFileIDs: [], error: '', queued: false
     }
-    const candidates = owned.filter((id) => id !== protectedAvatar)
+    const candidates = owned.filter((id) => !storage.sameFile(id, protectedAvatar))
     let deletable = []
     try {
       const checked = await excludeReferencedAvatars(db, candidates)
@@ -77,21 +78,15 @@ exports.main = async (event, context) => {
       result.failedFileIDs.push(...candidates)
       result.error = e?.message || '头像引用检查失败'
     }
-    for (let i = 0; i < deletable.length; i += 50) {
-      const batch = deletable.slice(i, i + 50)
-      try {
-        await uniCloud.deleteFile({ fileList: batch })
-        result.deletedFileIDs.push(...batch)
-      } catch (e) {
-        result.failedFileIDs.push(...batch)
-        result.error = e?.message || '头像文件删除失败'
-      }
-    }
+    const deletion = await storage.deleteFiles(uniCloud, deletable)
+    result.deletedFileIDs.push(...deletion.deletedFileIDs)
+    result.failedFileIDs.push(...deletion.failedFileIDs)
+    if (deletion.error) result.error = deletion.error
     if (result.failedFileIDs.length) {
       result.queued = await enqueueAvatarCleanup(result.failedFileIDs, reason, result.error)
       if (result.queued) result.queuedFileIDs = [...result.failedFileIDs]
     }
-    result.deleted = result.deletedFileIDs.length
+    result.deleted = deletion.deleted
     result.skipped = result.skippedFileIDs.length
     result.skipReason = result.skipped ? '文件归属或地址格式无法确认，保留待核对' : ''
     result.confirmedFileIDs = [...result.deletedFileIDs, ...result.protectedFileIDs, ...result.queuedFileIDs]

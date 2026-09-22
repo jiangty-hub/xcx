@@ -1,7 +1,0 @@
-{
-  "name": "get-user-profile",
-  "dependencies": {},
-  "extensions": {
-    "uni-cloud-jql": {}
-  }
-}
