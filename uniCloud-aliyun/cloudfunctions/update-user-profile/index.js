@@ -1,5 +1,6 @@
 'use strict'
 const uniID = require('uni-id-common')
+const { isOwnedAvatarFile, excludeReferencedAvatars, saveProfileSafely } = require('./avatar-files')
 
 exports.main = async (event, context) => {
   const { token, nickname, avatar, cleanupAvatarFileIds } = event || {}
@@ -23,9 +24,8 @@ exports.main = async (event, context) => {
   }
 
   function getOwnedAvatarFileIDs(fileIDs) {
-    const prefix = `/avatar/${uid}/`
     return [...new Set((Array.isArray(fileIDs) ? fileIDs : [])
-      .filter((fileID) => typeof fileID === 'string' && fileID.startsWith('cloud://') && fileID.includes(prefix)))]
+      .filter((fileID) => isOwnedAvatarFile(fileID, uid)))]
   }
 
   async function enqueueAvatarCleanup(fileIDs, reason, error) {
@@ -58,39 +58,43 @@ exports.main = async (event, context) => {
   }
 
   async function deleteOwnedAvatars(fileIDs, protectedAvatar = '', reason = 'avatar-cleanup') {
-    const source = Array.isArray(fileIDs) ? fileIDs : []
-    const list = getOwnedAvatarFileIDs(source)
-      .filter((fileID) => fileID !== protectedAvatar)
-    const protectedFileIDs = [...new Set(source.filter((fileID) => fileID === protectedAvatar))]
-    if (!list.length) {
-      return { deleted: 0, failedFileIDs: [], protectedFileIDs, error: '', queued: false }
+    const source = [...new Set((Array.isArray(fileIDs) ? fileIDs : [])
+      .filter((id) => typeof id === 'string' && id))]
+    const owned = getOwnedAvatarFileIDs(source)
+    const result = {
+      deleted: 0, deletedFileIDs: [], failedFileIDs: [], queuedFileIDs: [],
+      protectedFileIDs: source.filter((id) => id === protectedAvatar),
+      skippedFileIDs: source.filter((id) => id !== protectedAvatar && !owned.includes(id)),
+      confirmedFileIDs: [], error: '', queued: false
     }
-
-    let deleted = 0
-    const failedFileIDs = []
-    const errors = []
-    for (let i = 0; i < list.length; i += 50) {
-      const batch = list.slice(i, i + 50)
+    const candidates = owned.filter((id) => id !== protectedAvatar)
+    let deletable = []
+    try {
+      const checked = await excludeReferencedAvatars(db, candidates)
+      deletable = checked.deletable
+      result.protectedFileIDs.push(...checked.referenced)
+    } catch (e) {
+      result.failedFileIDs.push(...candidates)
+      result.error = e?.message || '头像引用检查失败'
+    }
+    for (let i = 0; i < deletable.length; i += 50) {
+      const batch = deletable.slice(i, i + 50)
       try {
         await uniCloud.deleteFile({ fileList: batch })
-        deleted += batch.length
+        result.deletedFileIDs.push(...batch)
       } catch (e) {
-        console.error('delete avatar files failed:', e)
-        failedFileIDs.push(...batch)
-        errors.push(e?.message || '头像文件删除失败')
+        result.failedFileIDs.push(...batch)
+        result.error = e?.message || '头像文件删除失败'
       }
     }
-
-    const result = {
-      deleted,
-      failedFileIDs,
-      protectedFileIDs,
-      error: [...new Set(errors)].join('; '),
-      queued: false
+    if (result.failedFileIDs.length) {
+      result.queued = await enqueueAvatarCleanup(result.failedFileIDs, reason, result.error)
+      if (result.queued) result.queuedFileIDs = [...result.failedFileIDs]
     }
-    if (failedFileIDs.length) {
-      result.queued = await enqueueAvatarCleanup(failedFileIDs, reason, result.error)
-    }
+    result.deleted = result.deletedFileIDs.length
+    result.skipped = result.skippedFileIDs.length
+    result.skipReason = result.skipped ? '文件归属或地址格式无法确认，保留待核对' : ''
+    result.confirmedFileIDs = [...result.deletedFileIDs, ...result.protectedFileIDs, ...result.queuedFileIDs]
     return result
   }
 
@@ -109,16 +113,23 @@ exports.main = async (event, context) => {
   if (avatar !== undefined) {
     if (typeof avatar !== 'string') return { code: 400, msg: 'avatar类型错误', ...authResult }
     const a = avatar.trim()
-    // 允许清空：传 "" 或 "   " 会清空
-    // 如果你只允许 cloud:// 或 http(s)，可以加更严格校验：
-    // if (a && !/^cloud:\/\/|^https?:\/\//i.test(a)) return { code: 400, msg: 'avatar格式错误' }
+    // 允许清空；新头像的归属和删除状态在保存事务内校验。
     updateData.avatar = a
   }
 
-  const oldRes = await db.collection('uni-id-users').doc(uid).field({ avatar: true }).get()
-  const oldAvatar = oldRes.data?.[0]?.avatar || ''
+  let oldAvatar = ''
   if (Object.keys(updateData).length) {
-    await db.collection('uni-id-users').doc(uid).update(updateData)
+    try {
+      oldAvatar = await saveProfileSafely(db, uid, updateData)
+    } catch (error) {
+      if ([400, 404, 409].includes(error.code)) {
+        return { code: error.code, msg: error.message, ...authResult }
+      }
+      throw error
+    }
+  } else {
+    const oldRes = await db.collection('uni-id-users').doc(uid).field({ avatar: true }).get()
+    oldAvatar = oldRes.data?.[0]?.avatar || ''
   }
 
   const currentAvatar = avatar !== undefined ? updateData.avatar : oldAvatar

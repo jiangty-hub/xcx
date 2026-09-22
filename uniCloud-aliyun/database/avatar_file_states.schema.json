@@ -1,0 +1,14 @@
+{
+  "bsonType": "object",
+  "description": "头像保存与清理的互斥状态；deleting 标记永久保留，禁止迟到保存重新引用待删/已删文件",
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "required": ["ownerUid", "fileID", "status", "revision", "updatedAt"],
+  "properties": {
+    "_id": { "description": "原始 fileID 的 SHA-256" },
+    "ownerUid": { "bsonType": "string" },
+    "fileID": { "bsonType": "string" },
+    "status": { "bsonType": "string", "enum": ["active", "deleting"] },
+    "revision": { "bsonType": "int" },
+    "updatedAt": { "bsonType": "timestamp" }
+  }
+}

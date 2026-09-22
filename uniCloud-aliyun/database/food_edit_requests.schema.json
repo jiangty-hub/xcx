@@ -1,0 +1,16 @@
+{
+  "bsonType": "object",
+  "description": "菜品编辑最终结果；与菜品更新同事务提交，不随日志或菜品删除清理",
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "required": ["ownerUid", "foodId", "payloadHash", "resultCode", "createdAt"],
+  "properties": {
+    "_id": { "description": "用户 UID 与编辑请求编号的 SHA-256，使用内置唯一性" },
+    "ownerUid": { "bsonType": "string" },
+    "foodId": { "bsonType": "string" },
+    "payloadHash": { "bsonType": "string" },
+    "resultCode": { "bsonType": "int" },
+    "message": { "bsonType": "string" },
+    "version": { "bsonType": "int" },
+    "createdAt": { "bsonType": "timestamp" }
+  }
+}

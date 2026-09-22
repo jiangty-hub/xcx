@@ -9,7 +9,7 @@
         <block v-for="(item, i) in cateList" :key="i">
           <view
             :class="['left-scroll-view-item', i === active ? 'active' : '']"
-            @click="activeChanged(i)"
+            @click="!loadingCategories && activeChanged(i)"
           >
             {{ item.name }}
           </view>
@@ -24,7 +24,13 @@
         :lower-threshold="80"
         @scrolltolower="loadMoreFoods"
       >
-        <view v-if="loadingFoods && !cateLevel.length" class="state-view">菜品加载中...</view>
+        <view v-if="loadingCategories || (!categoriesLoaded && !categoryError)" class="state-view">分类加载中...</view>
+        <view v-else-if="categoryError" class="state-view error-state">
+          <text>{{ categoryError }}</text>
+          <button size="mini" @click="getCateList">重试</button>
+        </view>
+        <view v-else-if="!cateList.length" class="state-view">暂无分类</view>
+        <view v-else-if="loadingFoods && !cateLevel.length" class="state-view">菜品加载中...</view>
         <view v-else-if="foodError && !cateLevel.length" class="state-view error-state">
           <text>{{ foodError }}</text>
           <button size="mini" @click="retryFoods">重试</button>
@@ -51,7 +57,11 @@
 </template>
 
 <script>
-const foodService = uniCloud.importObject('food-service')
+import { getResumeRefreshState } from '@/utils/resume-refresh.js'
+
+const foodService = uniCloud.importObject('food-service', { customUI: true })
+// 请求任务不参与页面渲染；每个页面实例独立保存。
+const requestStates = new WeakMap()
 
 export default {
   data() {
@@ -59,185 +69,230 @@ export default {
       wh: 0,
       active: 0,
       cateList: [],
+      loadingCategories: false,
+      categoriesLoaded: false,
+      categoryError: '',
       cateLevel: [],
       scrollTop: 0,
       foodRequestSeq: 0,
       foodPage: 1,
       foodHasMore: false,
       loadingFoods: false,
-      foodError: ''
+      foodError: '',
+      loadedCategoryId: '',
+      lastResumeSeqHandled: 0
     }
   },
 
   async onLoad() {
+    this.lastResumeSeqHandled = getResumeRefreshState(0).seq
     const sysInfo = uni.getWindowInfo()
     this.wh = sysInfo.windowHeight - 50
     await this.getCateList()
   },
 
-  // 从详情页回来（删/改）会触发 onShow，这里自动刷新
   async onShow() {
-    const need = uni.getStorageSync('needRefreshFoods')
-    if (need) {
-      uni.removeStorageSync('needRefreshFoods')
-      await this.refresh()
-    }
-    this.applySelectedCategoryFromStorage()
+    const resume = getResumeRefreshState(this.lastResumeSeqHandled)
+    if (resume.seq) this.lastResumeSeqHandled = resume.seq
+    if (resume.shouldRefresh) this.getRequestState().refreshVersion += 1
+    // 与 onLoad 共用分类初始化和目标菜品请求，不先刷新原分类。
+    await this.refresh({ force: false })
+  },
+
+  onUnload() {
+    this.getRequestState().disposed = true
+    this.foodRequestSeq += 1
   },
 
   methods: {
-    // ✅ 封面兜底：
-    // 1) 新接口：food.cover_urls[0]（临时链接，可直接展示）
-    // 2) 兼容旧数据：food.cover_images[0]（历史可能是 http url）
-    // 3) 默认图
+    getRequestState() {
+      let state = requestStates.get(this)
+      if (!state) {
+        state = { categoriesTask: null, foodTask: null, refreshVersion: 0, confirmedVersion: 0, disposed: false }
+        requestStates.set(this, state)
+      }
+      return state
+    },
+
+    // 展示封面：优先使用后端链接，兼容历史 HTTP 地址。
     getCover(food) {
       const defaultImg = '/static/cover-default.png'
-
       if (!food) return defaultImg
-
-      // 新后端返回：cover_urls（推荐）
-      if (Array.isArray(food.cover_urls) && food.cover_urls.length > 0 && food.cover_urls[0]) {
+      if (Array.isArray(food.cover_urls) && food.cover_urls.length && food.cover_urls[0]) {
         return food.cover_urls[0]
       }
-
-      // 兼容：旧数据 cover_images 里存的是 http(s) url
-      if (Array.isArray(food.cover_images) && food.cover_images.length > 0 && food.cover_images[0]) {
+      if (Array.isArray(food.cover_images) && food.cover_images.length && food.cover_images[0]) {
         const first = String(food.cover_images[0])
         if (first.startsWith('http')) return first
       }
-
       return defaultImg
     },
 
-    // 从 storage 读取 home 传来的分类 ID，并切换。
-    // selectedCategory 仅用于兼容旧版本留下的名称缓存。
-    async applySelectedCategoryFromStorage() {
+    // 只解析并消费首页目标，不在这里发请求。无效目标回退第一分类。
+    consumeSelectedCategoryIndex() {
       const selectedCategoryId = uni.getStorageSync('selectedCategoryId')
       const selectedCategory = uni.getStorageSync('selectedCategory')
       const hasCategoryId = selectedCategoryId !== undefined &&
         selectedCategoryId !== null && selectedCategoryId !== ''
-      if (!hasCategoryId && !selectedCategory) return
-      if (!this.cateList || this.cateList.length === 0) return
+      if (!hasCategoryId && !selectedCategory) return null
 
-      let index = -1
-      if (hasCategoryId) {
-        index = this.cateList.findIndex(
-          (item) => String(item.cate_id) === String(selectedCategoryId)
-        )
-      } else {
-        index = this.cateList.findIndex(
-          (item) => item.name === selectedCategory || item.name.replace(/类$/, '') === selectedCategory
-        )
-      }
-
-      if (index !== -1) {
-        await this.activeChanged(index)
-      }
+      const index = this.cateList.findIndex(item => hasCategoryId
+        ? String(item.cate_id) === String(selectedCategoryId)
+        : item.name === selectedCategory || String(item.name || '').replace(/类$/, '') === selectedCategory)
       uni.removeStorageSync('selectedCategoryId')
       uni.removeStorageSync('selectedCategory')
+      return index < 0 ? 0 : index
     },
 
-    // 获取分类列表数组
-    async getCateList() {
-      try {
-        const categories = await foodService.getCategories()
-        this.cateList = categories || []
+    // 模板重试和首次进入共用入口。
+    getCateList() {
+      return this.refresh({ force: false })
+    },
 
-        // 默认加载第一个分类的右侧菜品
-        if (this.cateList.length > 0) {
-          const firstCateId = String(this.cateList[0].cate_id)
-          const loaded = await this.loadFoodsByCategory(firstCateId)
-          if (loaded) this.active = 0
+    ensureCategories() {
+      const state = this.getRequestState()
+      if (state.disposed) return Promise.resolve(false)
+      if (state.categoriesTask) return state.categoriesTask
+      if (this.categoriesLoaded && !this.categoryError) return Promise.resolve(true)
+
+      this.loadingCategories = true
+      this.categoryError = ''
+      // 延后到微任务执行，先登记任务，连同同步异常也能正确释放任务。
+      const task = Promise.resolve().then(async () => {
+        try {
+          const categories = await foodService.getCategories()
+          if (state.disposed) return false
+          if (!Array.isArray(categories)) throw new Error('分类数据格式异常')
+          this.cateList = categories
+          this.categoriesLoaded = true
+          return true
+        } catch (err) {
+          if (state.disposed) return false
+          this.categoriesLoaded = false
+          this.categoryError = '分类加载失败，请重试'
+          console.error('get categories failed:', err)
+          return false
+        } finally {
+          if (!state.disposed) this.loadingCategories = false
+          if (state.categoriesTask === task) state.categoriesTask = null
         }
-
-        // 如果 home 传了 selectedCategory，优先切换到对应分类
-        await this.applySelectedCategoryFromStorage()
-      } catch (err) {
-        this.$showError(err, '分类加载失败', 1500)
-      }
+      })
+      state.categoriesTask = task
+      return task
     },
 
-    // 获取右侧菜品
-    async loadFoodsByCategory(cateId, { append = false, inlineError = true } = {}) {
-      if (append && (this.loadingFoods || !this.foodHasMore)) return false
+    // 合并恢复、修改刷新与首页跳转；失败时版本差保留刷新需求。
+    async refresh({ force = true } = {}) {
+      const state = this.getRequestState()
+      if (state.disposed) return false
+      if (force) state.refreshVersion += 1
+      if (uni.getStorageSync('needRefreshFoods')) {
+        state.refreshVersion += 1
+        // 转为页面内待完成版本，不依赖易被其他入口重复消费的布尔标记。
+        uni.removeStorageSync('needRefreshFoods')
+      }
+      if (!await this.ensureCategories() || state.disposed) return false
+      if (!this.cateList.length) return true
 
-      const requestSeq = ++this.foodRequestSeq
+      const selected = this.consumeSelectedCategoryIndex()
+      const index = selected === null ? (this.cateList[this.active] ? this.active : 0) : selected
+      return this.activeChanged(index)
+    },
+
+    activeChanged(i) {
+      const state = this.getRequestState()
+      const category = this.cateList[i]
+      if (state.disposed || !category) return Promise.resolve(false)
+      const cateId = String(category.cate_id)
+      const changed = String(this.cateList[this.active]?.cate_id) !== cateId
+      if (changed) {
+        // 目标与列表归属一起切换，旧响应由序号拦截，旧列表不能当成新分类。
+        this.active = i
+        this.cateLevel = []
+        this.loadedCategoryId = ''
+        this.foodPage = 1
+        this.foodHasMore = false
+        this.foodError = ''
+        this.scrollTop = this.scrollTop === 0 ? 1 : 0
+      }
+      if (this.loadedCategoryId === cateId && state.confirmedVersion === state.refreshVersion) {
+        return Promise.resolve(true)
+      }
+      return this.loadFoodsByCategory(cateId)
+    },
+
+    loadFoodsByCategory(cateId, { append = false } = {}) {
+      const state = this.getRequestState()
+      const categoryId = String(cateId)
+      if (state.disposed || String(this.cateList[this.active]?.cate_id) !== categoryId) {
+        return Promise.resolve(false)
+      }
+      if (append && (this.loadingFoods || !this.foodHasMore || this.loadedCategoryId !== categoryId ||
+          state.confirmedVersion !== state.refreshVersion)) return Promise.resolve(false)
+
       const page = append ? this.foodPage + 1 : 1
+      const current = state.foodTask
+      if (current && current.categoryId === categoryId && current.page === page &&
+          current.refreshVersion === state.refreshVersion) return current.promise
+
+      const request = { categoryId, page, append, refreshVersion: state.refreshVersion, seq: ++this.foodRequestSeq }
+      state.foodTask = request
       this.loadingFoods = true
       if (!append) this.foodError = ''
-      try {
-        const result = await foodService.getFoodsByCategory(String(cateId), { page, pageSize: 30 })
-        if (requestSeq !== this.foodRequestSeq) return false
+      request.promise = this.performFoodRequest(request)
+      return request.promise
+    },
 
+    async performFoodRequest(request) {
+      const state = this.getRequestState()
+      const isCurrent = () => !state.disposed && request.seq === this.foodRequestSeq &&
+        String(this.cateList[this.active]?.cate_id) === request.categoryId
+      try {
+        const result = await foodService.getFoodsByCategory(request.categoryId, { page: request.page, pageSize: 30 })
+        if (!isCurrent()) return false
         const list = Array.isArray(result) ? result : (result?.list || [])
-        this.cateLevel = append ? [...this.cateLevel, ...list] : list
-        this.foodPage = page
+        if (!Array.isArray(list)) throw new Error('菜品数据格式异常')
+        this.cateLevel = request.append ? [...this.cateLevel, ...list] : list
+        this.foodPage = request.page
         this.foodHasMore = Array.isArray(result) ? false : !!result?.hasMore
         this.foodError = ''
+        this.loadedCategoryId = request.categoryId
+        if (!request.append) {
+          state.confirmedVersion = request.refreshVersion
+          this.scrollTop = this.scrollTop === 0 ? 1 : 0
+        }
         return true
       } catch (err) {
-        if (requestSeq !== this.foodRequestSeq) return false
-        if (!append && inlineError && !this.cateLevel.length) {
+        if (!isCurrent()) return false
+        if (!request.append && !this.cateLevel.length) {
           this.foodError = err?.message || '菜品加载失败'
         } else {
-          this.foodError = ''
-          this.$showError(err, append ? '加载更多失败' : '菜品加载失败', 1500)
+          this.$showError(err, request.append ? '加载更多失败' : '菜品加载失败', 1500)
         }
         return false
       } finally {
-        if (requestSeq === this.foodRequestSeq) this.loadingFoods = false
+        if (isCurrent()) this.loadingFoods = false
+        if (state.foodTask === request) state.foodTask = null
       }
     },
 
-    // 左侧切换
-    async activeChanged(i) {
-      const category = this.cateList[i]
-      if (!category) return
-      const cateId = String(category.cate_id)
-      const loaded = await this.loadFoodsByCategory(cateId, { inlineError: false })
-      if (!loaded) return
-      this.active = i
-      // 让右侧滚动条回到顶部
-      this.scrollTop = this.scrollTop === 0 ? 1 : 0
-    },
-
-    async loadMoreFoods() {
+    loadMoreFoods() {
       const raw = this.cateList[this.active]?.cate_id
-      if (raw === null || raw === undefined) return
-      await this.loadFoodsByCategory(String(raw), { append: true })
+      if (raw === null || raw === undefined) return Promise.resolve(false)
+      return this.loadFoodsByCategory(String(raw), { append: true })
     },
 
     retryFoods() {
-      const raw = this.cateList[this.active]?.cate_id
-      if (raw === null || raw === undefined) return
-      this.loadFoodsByCategory(String(raw))
+      if (this.loadingCategories || this.loadingFoods) return
+      return this.refresh()
     },
 
-    // 给详情页删除成功后调用/以及 onShow 自动刷新用
-    async refresh() {
-      if (!this.cateList || this.cateList.length === 0) {
-        await this.getCateList()
-        return
-      }
-      const raw = this.cateList[this.active]?.cate_id
-      if (raw === null || raw === undefined) return
-      const loaded = await this.loadFoodsByCategory(String(raw))
-      if (!loaded) return
-      this.scrollTop = this.scrollTop === 0 ? 1 : 0
-    },
-
-    // 跳转到菜品详细页面
     gotoGoodsDetail(food) {
-      uni.navigateTo({
-        url: '/subpkg/goods_detail/goods_detail?id=' + food._id
-      })
+      uni.navigateTo({ url: '/subpkg/goods_detail/goods_detail?id=' + food._id })
     },
 
-    // 跳转到 search 页面
     gotoSearch() {
-      uni.navigateTo({
-        url: '/subpkg/search/search'
-      })
+      uni.navigateTo({ url: '/subpkg/search/search' })
     }
   }
 }

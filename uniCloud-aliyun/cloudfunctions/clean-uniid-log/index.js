@@ -2,6 +2,7 @@
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const BATCH_SIZE = 500
+const ALLOWED_SOURCES = new Set(['timing', 'server'])
 
 async function removeInBatches(collection, condition, command) {
   const countRes = await collection.where(condition).count()
@@ -28,7 +29,12 @@ async function removeInBatches(collection, condition, command) {
   return { willDelete, deleted }
 }
 
-exports.main = async () => {
+exports.main = async (event, context) => {
+  // 只信任平台提供的调用来源；业务参数不能放行清理操作。
+  if (!ALLOWED_SOURCES.has(context?.SOURCE)) {
+    return { code: 403, msg: '不允许通过此来源执行清理' }
+  }
+
   const db = uniCloud.database()
   const command = db.command
   const now = Date.now()

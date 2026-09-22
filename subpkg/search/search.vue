@@ -46,6 +46,8 @@
 </template>
 
 <script>
+import { getResumeRefreshState } from '@/utils/resume-refresh.js'
+
 export default {
   data() {
     return {
@@ -60,11 +62,17 @@ export default {
       searchError: '',
       searchPage: 1,
       searchHasMore: false,
-      foodService: null
+      foodService: null,
+      lastResumeSeqHandled: 0,
+      refreshOnDetailReturn: false
     }
   },
 
-  onShow() {
+  onLoad() {
+    this.lastResumeSeqHandled = getResumeRefreshState(0).seq
+  },
+
+  async onShow() {
     try {
       const stored = uni.getStorageSync('kw')
       const parsed = typeof stored === 'string' ? JSON.parse(stored || '[]') : stored
@@ -72,6 +80,19 @@ export default {
     } catch (e) {
       this.historyList = []
       uni.removeStorageSync('kw')
+    }
+
+    const resume = getResumeRefreshState(this.lastResumeSeqHandled)
+    if (resume.seq) this.lastResumeSeqHandled = resume.seq
+    // 从详情返回和后台恢复合并为一次刷新，不消耗分类页的刷新标记。
+    const shouldRefresh = this.refreshOnDetailReturn || resume.shouldRefresh
+    this.refreshOnDetailReturn = false
+    if (shouldRefresh && String(this.kw || '').trim()) {
+      clearTimeout(this.timer)
+      this.timer = null
+      this.searchPage = 1
+      this.searchHasMore = false
+      await this.search(++this.searchSeq)
     }
   },
 
@@ -86,7 +107,7 @@ export default {
 
   created() {
     // 云对象实例
-    this.foodService = uniCloud.importObject('food-service')
+    this.foodService = uniCloud.importObject('food-service', { customUI: true })
   },
 
   methods: {
@@ -200,8 +221,13 @@ export default {
         uni.showToast({ title: '缺少菜品ID', icon: 'none' })
         return
       }
+      this.refreshOnDetailReturn = true
       uni.navigateTo({
-        url: '/subpkg/goods_detail/goods_detail?id=' + id
+        url: '/subpkg/goods_detail/goods_detail?id=' + id,
+        fail: () => {
+          this.refreshOnDetailReturn = false
+          uni.showToast({ title: '打开菜品失败，请重试', icon: 'none' })
+        }
       })
     },
 

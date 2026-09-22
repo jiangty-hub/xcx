@@ -1,4 +1,6 @@
 'use strict'
+const { URL } = require('url')
+const { createHash } = require('crypto')
 const db = uniCloud.database()
 const uniID = require('uni-id-common')
 const STORAGE_FILE_BATCH_SIZE = 50
@@ -299,19 +301,22 @@ async function attachVerifiedCategory(data) {
   return data
 }
 
+// 本项目阿里云文件的实际地址；更换服务空间时需同步更新两个清理云函数。
+const FOOD_STORAGE_HOST = 'mp-e3a48079-7f55-4c65-8f6c-9d757e567f86.cdn.bspapp.com'
+
 function isFoodCoverFile(fileID) {
   if (typeof fileID !== 'string') return false
   if (fileID.startsWith('cloud://')) return fileID.includes('/foods/')
 
-  if (/^https?:\/\//i.test(fileID)) {
-    try {
-      return new URL(fileID).pathname.includes('/foods/')
-    } catch (e) {
-      return false
-    }
+  try {
+    const url = new URL(fileID)
+    // 仅接受本空间的原始文件地址，避免临时签名或地址别名绕过引用检查。
+    if (url.protocol !== 'https:' || url.hostname !== FOOD_STORAGE_HOST ||
+        url.username || url.password || url.port || url.search || url.hash || url.href !== fileID) return false
+    return /^\/(?:cloudstorage|foods)\/.+/.test(url.pathname) && !url.pathname.endsWith('/')
+  } catch (e) {
+    return false
   }
-
-  return false
 }
 
 async function deleteCloudFiles(fileIDs, { foodOnly = false } = {}) {
@@ -321,9 +326,10 @@ async function deleteCloudFiles(fileIDs, { foodOnly = false } = {}) {
   const list = [...new Set(filtered)]
   const skipped = source.length - filtered.length
 
-  if (!list.length) return { deleted: 0, skipped, error: '', failedFileIDs: [] }
+  if (!list.length) return { deleted: 0, deletedFileIDs: [], skipped, error: '', failedFileIDs: [] }
 
   let deleted = 0
+  const deletedFileIDs = []
   const failedFileIDs = []
   const errors = []
   const requestIds = []
@@ -332,6 +338,7 @@ async function deleteCloudFiles(fileIDs, { foodOnly = false } = {}) {
     try {
       const res = await uniCloud.deleteFile({ fileList: batch })
       deleted += batch.length
+      deletedFileIDs.push(...batch)
       if (res?.requestId) requestIds.push(res.requestId)
     } catch (e) {
       console.error('delete cloud files failed:', e)
@@ -342,6 +349,7 @@ async function deleteCloudFiles(fileIDs, { foodOnly = false } = {}) {
 
   return {
     deleted,
+    deletedFileIDs,
     skipped,
     error: [...new Set(errors)].join('; '),
     failedFileIDs,
@@ -405,6 +413,23 @@ async function excludeReferencedFoodCovers(fileIDs) {
       if (docs.length < 100) break
       offset += docs.length
     }
+
+    // cloudstorage 同时存放菜品和头像，清理前也保护用户当前使用的头像。
+    let userOffset = 0
+    while (true) {
+      const res = await db.collection('uni-id-users')
+        .where({ avatar: db.command.in(batch) })
+        .field({ avatar: true })
+        .skip(userOffset)
+        .limit(100)
+        .get()
+      const users = res.data || []
+      users.forEach((user) => {
+        if (batch.includes(user.avatar)) referenced.add(user.avatar)
+      })
+      if (users.length < 100) break
+      userOffset += users.length
+    }
   }
 
   return {
@@ -414,14 +439,22 @@ async function excludeReferencedFoodCovers(fileIDs) {
 }
 
 async function deleteCoverFiles(coverImages, reason) {
-  const { fileIDs, urls } = splitCoverList(coverImages)
-  const candidates = [...fileIDs, ...urls]
+  const candidates = [...new Set((Array.isArray(coverImages) ? coverImages : [])
+    .filter((id) => typeof id === 'string' && id))]
+  const skippedFileIDs = candidates.filter((id) => !isFoodCoverFile(id))
   const { deletable, referenced } = await excludeReferencedFoodCovers(candidates)
   const cleanup = await deleteCloudFiles(deletable, { foodOnly: true })
   cleanup.protectedFileIDs = referenced
+  cleanup.skippedFileIDs = skippedFileIDs
+  cleanup.skipped = skippedFileIDs.length
+  cleanup.skipReason = skippedFileIDs.length ? '不是本项目支持的菜品图片地址' : ''
   if (cleanup.error) {
     cleanup.queued = await enqueueFileCleanup(cleanup.failedFileIDs, reason, cleanup.error)
   }
+  // 客户端只移除明确完成、受引用保护或已由云端接管重试的待清理记录。
+  cleanup.confirmedFileIDs = [...cleanup.deletedFileIDs, ...referenced,
+    ...(cleanup.queued ? cleanup.failedFileIDs : [])]
+  if (cleanup.error || cleanup.skipped) console.warn(reason + ' cover cleanup incomplete:', cleanup)
   return cleanup
 }
 
@@ -442,6 +475,10 @@ async function deleteCoverFilesAfterMutation(coverImages, reason) {
     const queued = await enqueueFileCleanup(candidates, reason, error)
     return {
       deleted: 0,
+      deletedFileIDs: [],
+      confirmedFileIDs: queued ? candidates : [],
+      skippedFileIDs: source.filter((id) => !isFoodCoverFile(id)),
+      skipReason: source.length > valid.length ? '不是本项目支持的菜品图片地址' : '',
       skipped: source.length - valid.length,
       error,
       failedFileIDs: candidates,
@@ -586,47 +623,109 @@ module.exports = {
     }
   },
 
-  async updateFood(id, payload = {}, token) {
-    if (!id) throw new Error('id 不能为空')
+  async updateFood(id, payload = {}, token, expectedVersion, requestId) {
+    // 旧版没有持久化保护记录，不能继续走可能与清理竞态的写入路径。
+    return module.exports.updateFoodOnce.call(this, id, payload, token, expectedVersion, requestId)
+  },
 
+  async updateFoodOnce(id, payload = {}, token, expectedVersion, requestId) {
     const auth = await requireLogin(this, token)
     await requireAdmin(this, auth.uid)
-
-    const foods = db.collection('foods')
-    const updateData = validateFoodPayload(payload, { partial: true })
-    await attachVerifiedCategory(updateData)
-    const old = await foods.doc(id).get()
-    const oldFood = old.data && old.data[0]
-    if (!oldFood) throw new Error('菜品不存在')
-
-    await foods.doc(id).update(updateData)
-
-    // 图片先完成数据库更新，再清理本次被移除的旧文件，避免更新失败时误删图片。
-    let cleanup = null
-    if (updateData.cover_images !== undefined) {
-      const next = new Set(updateData.cover_images)
-      const removed = (Array.isArray(oldFood.cover_images) ? oldFood.cover_images : [])
-        .filter(fileID => !next.has(fileID))
-      cleanup = await deleteCoverFilesAfterMutation(removed, 'update-food')
-      if (cleanup.error || cleanup.skipped) console.warn('update food cover cleanup incomplete:', cleanup)
+    const authResult = { newToken: auth.newToken, tokenExpired: auth.tokenExpired }
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{20,80}$/.test(requestId)) {
+      return { code: 426, updated: false, msg: '请更新小程序后再修改菜品', ...authResult }
     }
-    return {
-      updated: true,
-      cleanup,
-      newToken: auth.newToken,
-      tokenExpired: auth.tokenExpired
+    if (typeof id !== 'string' || !id) throw new Error('id 不能为空')
+    const requestKey = createHash('sha256').update(JSON.stringify([auth.uid, requestId])).digest('hex')
+    // 包括目标菜品和原版本；重试必须使用持久化的原始提交内容。
+    const payloadHash = createHash('sha256').update(JSON.stringify([id, expectedVersion, payload])).digest('hex')
+    const requests = db.collection('food_edit_requests')
+    const asResult = (record, replayed) => ({
+      code: record.resultCode, updated: record.resultCode === 0, terminal: true,
+      version: record.version, msg: record.message, replayed, ...authResult
+    })
+    const readSaved = async () => {
+      const res = await requests.doc(requestKey).get()
+      const record = res.data && res.data[0]
+      if (!record) return null
+      if (record.ownerUid !== auth.uid || record.payloadHash !== payloadHash) {
+        // 不是本次内容的最终结果，客户端必须继续保护图片。
+        return { code: 409, terminal: false, updated: false, msg: '提交内容不一致，请重新进入编辑页确认原修改', ...authResult }
+      }
+      return asResult(record, true)
     }
+    const saved = await readSaved()
+    if (saved) return saved
+
+    let updateData = {}
+    let rejection = ''
+    try {
+      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion >= Number.MAX_SAFE_INTEGER) {
+        throw new Error('缺少有效的菜品版本，请重新打开编辑页')
+      }
+      updateData = validateFoodPayload(payload, { partial: true })
+    } catch (error) {
+      rejection = error.message || '菜品数据不合法'
+    }
+    if (!rejection) {
+      try {
+        await attachVerifiedCategory(updateData)
+      } catch (error) {
+        if (['所选分类不存在或已停用', '所选分类名称无效', '菜品分类不能为空'].includes(error.message)) rejection = error.message
+        else throw error
+      }
+    }
+
+    const transaction = await db.startTransaction()
+    let result
+    try {
+      const record = {
+        _id: requestKey, ownerUid: auth.uid, foodId: id, payloadHash,
+        resultCode: rejection ? 400 : 0, message: rejection, createdAt: Date.now()
+      }
+      if (!rejection) {
+        // 阿里云事务仅用 doc 读写单条记录；读版本和写菜品处于同一事务。
+        const old = await transaction.collection('foods').doc(id).get()
+        const oldFood = Array.isArray(old.data) ? old.data[0] : old.data
+        if (!oldFood || (oldFood.version === undefined ? 0 : oldFood.version) !== expectedVersion) {
+          record.resultCode = 409
+          record.message = '菜品已被修改或删除，本次修改未保存。请先保留需要的内容，再重新打开编辑页。'
+        } else {
+          updateData.version = expectedVersion + 1
+          const changed = await transaction.collection('foods').doc(id).update(updateData)
+          if (changed.updated !== 1) throw new Error('保存结果尚未确认，请重试确认')
+          record.version = updateData.version
+          const next = new Set(updateData.cover_images || [])
+          const removed = updateData.cover_images === undefined ? [] :
+            (Array.isArray(oldFood.cover_images) ? oldFood.cover_images : []).filter(fileID => !next.has(fileID) && isFoodCoverFile(fileID))
+          if (removed.length) {
+            // 旧图片清理任务也随保存提交；提交确认丢失仍不会漏掉清理任务。
+            await transaction.collection('file_cleanup_tasks').add({
+              taskType: 'food', fileIDs: removed, reason: 'update-food', status: 'pending',
+              attempts: 0, createdAt: Date.now(), updatedAt: Date.now()
+            })
+          }
+        }
+      }
+      // 明确拒绝同样写入终态，阻止同编号的迟到请求再次保存。
+      await transaction.collection('food_edit_requests').add(record)
+      await transaction.commit()
+      result = asResult(record, false)
+    } catch (error) {
+      try { await transaction.rollback() } catch (rollbackError) {
+        console.warn('edit food rollback not confirmed:', rollbackError)
+      }
+      const recovered = await readSaved()
+      if (recovered) return recovered
+      throw error
+    }
+    return result
   },
 
   async cleanupUploadedCoverFiles(fileIDs, token) {
     const auth = await requireLogin(this, token)
     await requireAdmin(this, auth.uid)
-    const { deletable, referenced } = await excludeReferencedFoodCovers(fileIDs)
-    const cleanup = await deleteCloudFiles(deletable, { foodOnly: true })
-    cleanup.protectedFileIDs = referenced
-    if (cleanup.error) {
-      cleanup.queued = await enqueueFileCleanup(cleanup.failedFileIDs, 'abandon-upload', cleanup.error)
-    }
+    const cleanup = await deleteCoverFiles(fileIDs, 'abandon-upload')
     return {
       ...cleanup,
       newToken: auth.newToken,
@@ -634,23 +733,93 @@ module.exports = {
     }
   },
 
-  async addFood(payload = {}, token) {
+  // 旧客户端不能回退到无去重的新增逻辑；已有菜品读写不受影响。
+  async addFood(payload, token, requestId) {
+    return module.exports.addFoodOnce.call(this, payload, token, requestId)
+  },
+
+  async addFoodOnce(payload = {}, token, requestId) {
     const auth = await requireLogin(this, token)
     await requireAdmin(this, auth.uid)
+    const authResult = { newToken: auth.newToken, tokenExpired: auth.tokenExpired }
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{20,80}$/.test(requestId)) {
+      return { code: 426, msg: '请更新小程序后再新增菜品', ...authResult }
+    }
 
-    const data = validateFoodPayload(payload)
-    await attachVerifiedCategory(data)
+    let data
+    try {
+      data = validateFoodPayload(payload)
+      if (!data.name || data.categoryId === undefined || data.categoryId === '') {
+        throw new Error('请填写菜名并选择分类')
+      }
+    } catch (error) {
+      return { code: 400, msg: error.message || '菜品数据不合法', ...authResult }
+    }
+    const requestKey = createHash('sha256').update(JSON.stringify([auth.uid, requestId])).digest('hex')
+    // 固定字段顺序的校验结果用于比对；分类名称核对前计算，避免分类改名影响重试。
+    const payloadHash = createHash('sha256').update(JSON.stringify(data)).digest('hex')
+    const requests = db.collection('food_create_requests')
+    const readSaved = async () => {
+      const res = await requests.doc(requestKey).get()
+      const saved = res.data && res.data[0]
+      if (!saved) return null
+      if (saved.ownerUid !== auth.uid || saved.payloadHash !== payloadHash) {
+        return { code: 409, msg: '该次提交内容不一致，请保留当前内容后核对已发布菜品', ...authResult }
+      }
+      if (saved.resultCode === 400) return { code: 400, msg: saved.message, ...authResult }
+      // 菜品后来被编辑/删除时仍返回原提交结果，绝不重新创建或覆盖菜品。
+      return { code: 0, id: saved.foodId, replayed: true, ...authResult }
+    }
+    const saved = await readSaved()
+    if (saved) return saved
+
+    // 分类状态可能变化，明确拒绝也要留下终态，避免与尚在处理的同编号请求竞态。
+    let rejectionMessage = ''
+    try {
+      await attachVerifiedCategory(data)
+    } catch (error) {
+      if (['所选分类不存在或已停用', '所选分类名称无效', '菜品分类不能为空'].includes(error.message)) {
+        rejectionMessage = error.message
+      } else throw error
+    }
     if (!data.cover_images) data.cover_images = []
-
     data.foodId = Date.now() + '_' + Math.random().toString(16).slice(2)
+    data.version = 1
     data.created_by = auth.uid
     data.created_at = Date.now()
 
-    const res = await db.collection('foods').add(data)
-    return {
-      id: res.id || (res.result && res.result.id),
-      newToken: auth.newToken,
-      tokenExpired: auth.tokenExpired
+    const transaction = await db.startTransaction()
+    try {
+      if (rejectionMessage) {
+        await transaction.collection('food_create_requests').add({
+          _id: requestKey, ownerUid: auth.uid, payloadHash, foodId: '',
+          resultCode: 400, message: rejectionMessage, createdAt: Date.now()
+        })
+        await transaction.commit()
+        return { code: 400, msg: rejectionMessage, ...authResult }
+      }
+      const added = await transaction.collection('foods').add(data)
+      const id = added.id || added.result?.id
+      if (!id) throw new Error('新增返回结果异常')
+      // _id 自带唯一性；并发请求冲突时，整笔事务（包括菜品）一起回滚。
+      await transaction.collection('food_create_requests').add({
+        _id: requestKey,
+        ownerUid: auth.uid,
+        payloadHash,
+        foodId: id,
+        resultCode: 0,
+        createdAt: Date.now()
+      })
+      await transaction.commit()
+      return { code: 0, id, replayed: false, ...authResult }
+    } catch (error) {
+      try { await transaction.rollback() } catch (rollbackError) {
+        console.warn('create food rollback not confirmed:', rollbackError)
+      }
+      // 包括“提交已成功但确认丢失”；只在读到已完成记录时报告成功。
+      const recovered = await readSaved()
+      if (recovered) return recovered
+      throw error
     }
   }
 }

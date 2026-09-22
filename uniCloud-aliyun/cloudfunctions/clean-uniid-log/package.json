@@ -1,0 +1,18 @@
+{
+  "name": "clean-uniid-log",
+  "version": "1.0.0",
+  "description": "定期清理 uni-id-log",
+  "main": "index.js",
+  "dependencies": {},
+  "cloudfunction-config": {
+    "memorySize": 512,
+    "timeout": 600,
+    "triggers": [
+      {
+        "name": "clean_uniid_log_weekly",
+        "type": "timer",
+        "config": "0 7 3 * * 1 *"
+      }
+    ]
+  }
+}

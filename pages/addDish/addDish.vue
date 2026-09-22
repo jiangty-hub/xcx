@@ -5,21 +5,27 @@
     </view>
 
     <view class="content">
+      <view v-if="pendingCreate" class="card">
+        <text>发布结果待确认，请点击底部“重试确认”。确认完成前暂不能修改内容，离开后可再次进入继续确认。</text>
+      </view>
+      <view v-if="pendingEdit" class="card">
+        <text>修改结果待确认，请点击底部“重试确认”。确认前暂不能修改内容，离开后可重新进入此菜品编辑页继续确认。</text>
+      </view>
       <!-- 基础信息 -->
       <view class="card">
         <view class="row">
           <text class="label">菜名</text>
-          <input class="input" v-model="form.name" placeholder="例如：麻婆豆腐" />
+          <input :disabled="formLocked" class="input" v-model="form.name" placeholder="例如：麻婆豆腐" />
         </view>
 
         <view class="row">
           <text class="label">价格</text>
-          <input class="input" type="number" v-model="form.price" placeholder="例如：880" />
+          <input :disabled="formLocked" class="input" type="number" v-model="form.price" placeholder="例如：880" />
         </view>
 
         <view class="row">
           <text class="label">菜品分类</text>
-          <picker class="picker" :range="cateList" range-key="name" :value="cateIndex" @change="onCateChange">
+          <picker :disabled="formLocked" class="picker" :range="cateList" range-key="name" :value="cateIndex" @change="onCateChange">
             <view class="picker-view">
               <text v-if="cateIndex !== -1">{{ cateList[cateIndex].name }}</text>
               <text v-else class="placeholder">请选择分类</text>
@@ -29,22 +35,22 @@
 
         <view class="row">
           <text class="label">口味</text>
-          <input class="input" v-model="form.flavor" placeholder="例如：咸香微辣/酸甜可口" />
+          <input :disabled="formLocked" class="input" v-model="form.flavor" placeholder="例如：咸香微辣/酸甜可口" />
         </view>
 
         <view class="row">
           <text class="label">难度</text>
-          <input class="input" v-model="form.difficulty" placeholder="例如：简单/中等/困难" />
+          <input :disabled="formLocked" class="input" v-model="form.difficulty" placeholder="例如：简单/中等/困难" />
         </view>
 
         <view class="row">
           <text class="label">时长(分)</text>
-          <input class="input" type="number" v-model="form.cook_time" placeholder="例如：10" />
+          <input :disabled="formLocked" class="input" type="number" v-model="form.cook_time" placeholder="例如：10" />
         </view>
 
         <view class="row col">
           <text class="label">菜品简介</text>
-          <textarea class="textarea" v-model="form.summary" placeholder="一句话介绍菜品" />
+          <textarea :disabled="formLocked" class="textarea" v-model="form.summary" placeholder="一句话介绍菜品" />
         </view>
       </view>
 
@@ -64,14 +70,14 @@
         <view class="row">
           <view
             class="btn small btn-add"
-            :class="{ disabled: uploading || !canManage || form.cover_images.length >= maxCoverImages }"
+            :class="{ disabled: formLocked || !canManage || form.cover_images.length >= maxCoverImages }"
             @click="chooseAndUploadCover('album')"
           >
             {{ uploading ? '上传中...' : (form.cover_images.length >= maxCoverImages ? '已达图片上限' : '从相册选择') }}
           </view>
           <view
             class="btn small btn-add"
-            :class="{ disabled: uploading || !canManage || form.cover_images.length >= maxCoverImages }"
+            :class="{ disabled: formLocked || !canManage || form.cover_images.length >= maxCoverImages }"
             @click="chooseAndUploadCover('camera')"
           >
             {{ uploading ? '上传中...' : (form.cover_images.length >= maxCoverImages ? '已达图片上限' : '拍照上传') }}
@@ -93,8 +99,8 @@
         <view class="section-title">标签</view>
 
         <view class="row split">
-          <input class="input grow" v-model="tagInput" placeholder="例如：下饭/好吃" />
-          <view class="btn small btn-add shrink" :class="{ disabled: !canManage }" @click="addTag">添加</view>
+          <input :disabled="formLocked" class="input grow" v-model="tagInput" placeholder="例如：下饭/好吃" />
+          <view class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addTag">添加</view>
         </view>
 
         <view class="chips" v-if="form.tags.length">
@@ -110,8 +116,8 @@
         <view class="section-title">食材清单</view>
 
         <view class="row split">
-          <input class="input grow" v-model="ingInput" placeholder="例如：肥牛/猪肉" />
-          <view class="btn small btn-add shrink" :class="{ disabled: !canManage }" @click="addIngredient">添加</view>
+          <input :disabled="formLocked" class="input grow" v-model="ingInput" placeholder="例如：肥牛/猪肉" />
+          <view class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addIngredient">添加</view>
         </view>
 
         <view class="list" v-if="form.ingredients.length">
@@ -127,8 +133,8 @@
         <view class="section-title">制作步骤</view>
 
         <view class="row split">
-          <input class="input grow" v-model="stepInput" placeholder="例如：猪肉焯水..." />
-          <view class="btn small btn-add shrink" :class="{ disabled: !canManage }" @click="addStep">添加</view>
+          <input :disabled="formLocked" class="input grow" v-model="stepInput" placeholder="例如：猪肉焯水..." />
+          <view class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addStep">添加</view>
         </view>
 
         <view class="list" v-if="form.steps.length">
@@ -143,18 +149,22 @@
     <!-- ✅ 底部按钮：固定 -->
     <view class="bottom">
       <view class="btn ghost" @click="onCancel">取消</view>
-      <view class="btn primary" :class="{ disabled: submitting || uploading || !canManage }" @click="onSubmit">
-        {{ submitting ? '提交中...' : (mode === 'edit' ? '保存修改' : '发布菜品') }}
+      <view class="btn primary" :class="{ disabled: submitting || uploading || createInitializing || leaveGuardLeaving || !canManage }" @click="onSubmit">
+        {{ submitting ? '提交中...' : ((pendingEdit || pendingCreate) ? '重试确认' : (mode === 'edit' ? '保存修改' : '发布菜品')) }}
       </view>
     </view>
   </view>
 </template>
 
 <script>
+import { beginLoading } from '@/utils/loading.js'
+import leaveGuard from '@/utils/leave-guard.js'
+import { getFoodCreateRequest, saveFoodCreateRequest, clearFoodCreateRequest, getProtectedCreateCovers, newFoodCreateId } from '@/utils/food-create-request.js'
+import { getFoodEditRequest, saveFoodEditRequest, clearFoodEditRequest, getProtectedEditCovers } from '@/utils/food-edit-request.js'
 import { applyNewToken, checkManagePermission, getAuthToken } from '@/utils/auth.js'
 import { addPendingCleanup, getPendingCleanup, removePendingCleanup } from '@/utils/pending-cleanup.js'
 
-const foodService = uniCloud.importObject('food-service')
+const foodService = uniCloud.importObject('food-service', { customUI: true })
 const STORAGE_FILE_BATCH_SIZE = 50
 const MAX_COVER_IMAGES = 9
 
@@ -167,10 +177,34 @@ function chunkList(list, size = STORAGE_FILE_BATCH_SIZE) {
 }
 
 export default {
+  mixins: [leaveGuard],
+
+  computed: {
+    formLocked() {
+      return this.createInitializing || this.submitting || this.uploading ||
+        this.leaveGuardLeaving || !!this.pendingCreate || !!this.pendingEdit
+    },
+    leaveGuardMessage() {
+      if (this.submitting) return '正在保存，离开后请确认保存结果。'
+      if (this.uploading) return '图片上传中，离开可能丢失本次上传。'
+      if (this.pendingCreate) return '发布结果尚未确认，离开后可再次进入新增页继续确认。'
+      if (this.pendingEdit) return '修改结果尚未确认，离开后可重新进入此菜品编辑页继续确认。'
+      const hasDraft = [this.tagInput, this.ingInput, this.stepInput].some(value => String(value || '').trim())
+      return (hasDraft || (this.snapshot && this.isDirty()))
+        ? '内容尚未保存，离开将丢失本次修改。' : ''
+    }
+  },
+
   data() {
     return {
       mode: 'add',
+      createInitializing: true,
+      createOwnerUid: '',
+      createRequestId: '',
+      pendingCreate: null,
+      pendingEdit: null,
       foodId: '',
+      foodVersion: null,
       submitting: false,
       cateList: [],
       cateIndex: -1,
@@ -189,8 +223,8 @@ export default {
 
       backLock: false,
 
-      // loading 计数器
-      loadingCount: 0,
+      // 本页面持有的加载任务；每个任务只关闭一次
+      loadingStops: [],
 
       form: {
         foodId: '',
@@ -225,7 +259,32 @@ export default {
     // ✅ 先判断权限（没权限也可以看页面，但不能提交/上传）
     await this.refreshPermission()
     if (this.canManage) {
-      this.newlyUploadedCoverIds = getPendingCleanup('food')
+      this.createOwnerUid = uni.getStorageSync('uni_id_uid') || ''
+      if (this.mode === 'edit') {
+        try {
+          this.pendingEdit = getFoodEditRequest(this.createOwnerUid, this.foodId)
+          if (this.pendingEdit) {
+            this.form = { ...this.form, ...JSON.parse(JSON.stringify(this.pendingEdit.payload)) }
+            this.foodVersion = this.pendingEdit.expectedVersion
+          }
+        } catch (error) {
+          uni.showToast({ title: error.message || '读取待确认修改失败', icon: 'none' })
+          return
+        }
+      }
+      if (this.mode !== 'edit') {
+        try {
+          this.pendingCreate = getFoodCreateRequest(this.createOwnerUid)
+          if (this.pendingCreate) {
+            this.createRequestId = this.pendingCreate.requestId
+            this.form = { ...this.form, ...this.pendingCreate.payload }
+          }
+        } catch (error) {
+          uni.showToast({ title: error.message || '读取待确认发布失败', icon: 'none' })
+          return
+        }
+      }
+      this.newlyUploadedCoverIds = [...new Set([...getPendingCleanup('food'), ...(this.pendingCreate?.uploadedCoverIds || []), ...(this.pendingEdit?.uploadedCoverIds || [])])]
       await this.cleanupPendingCovers()
     }
 
@@ -235,8 +294,11 @@ export default {
         uni.navigateBack()
         return
       }
-      const loaded = await this.loadForEdit()
+      const loaded = this.pendingEdit ? true : await this.loadForEdit()
       if (!loaded) return
+      this.syncCateIndexByForm()
+      await this.hydrateCoverUrls()
+    } else if (this.pendingCreate) {
       this.syncCateIndexByForm()
       await this.hydrateCoverUrls()
     } else {
@@ -248,6 +310,7 @@ export default {
     }
 
     this.snapshot = JSON.stringify(this.normalizeForm(this.form))
+    this.createInitializing = false
   },
 
   // 页面离开兜底：提交/上传进行中时只保留待清理记录，避免与写库请求并发删除图片。
@@ -260,11 +323,8 @@ export default {
   },
 
   onBackPress() {
+    if (this.leaveGuardLeaving) return false
     if (this.submitting || this.uploading) {
-      uni.showToast({
-        title: this.submitting ? '正在提交，请稍候' : '图片上传中，请稍候',
-        icon: 'none'
-      })
       return true
     }
     if (this.backLock) return true
@@ -272,7 +332,7 @@ export default {
       this.backLock = true
       uni.showModal({
         title: '提示',
-        content: '内容尚未保存，确定要离开吗？',
+        content: this.pendingEdit ? '修改结果尚未确认，离开后可重新进入此菜品编辑页继续确认。' : (this.pendingCreate ? '发布结果尚未确认，离开后可再次进入新增页继续确认。' : '内容尚未保存，确定要离开吗？'),
         success: async (res) => {
           if (res.confirm) {
             await this.leaveWithCleanup()
@@ -312,33 +372,13 @@ export default {
       }
     },
 
-    // ✅ showLoading 包装：计数 + try/catch
     safeShowLoading(title = '加载中...') {
-      this.loadingCount = (this.loadingCount || 0) + 1
-      try {
-        uni.showLoading({ title, mask: true })
-      } catch (e) {
-        console.warn('showLoading failed:', e)
-      }
+      this.loadingStops.push(beginLoading(title))
     },
 
-    // ✅ hideLoading 包装：只在真正 show 过时才 hide；并延迟到下一轮，避开 toast 状态竞争
-    safeHideLoading(force = false) {
-      if (!force) {
-        this.loadingCount = Math.max(0, (this.loadingCount || 0) - 1)
-        if (this.loadingCount > 0) return
-      } else {
-        this.loadingCount = 0
-      }
-
-      this.$nextTick(() => {
-        setTimeout(() => {
-          try {
-            const r = uni.hideLoading()
-            if (r && typeof r.catch === 'function') r.catch(() => {})
-          } catch (e) {}
-        }, 16)
-      })
+    async safeHideLoading(force = false) {
+      const stops = force ? this.loadingStops.splice(0) : this.loadingStops.splice(-1)
+      await Promise.all(stops.map(stop => stop()))
     },
 
     async loadCategories() {
@@ -355,6 +395,7 @@ export default {
       this.safeShowLoading('加载中...')
       try {
         const dish = await foodService.getFoodDetail(this.foodId)
+        this.foodVersion = dish.version === undefined ? 0 : dish.version
 
         this.form = {
           ...this.form,
@@ -374,12 +415,12 @@ export default {
         }
         return true
       } catch (e) {
+        await this.safeHideLoading(true)
         uni.showToast({ title: e?.message || '加载失败', icon: 'none' })
-        this.safeHideLoading(true)
-        setTimeout(() => uni.navigateBack(), 150)
+        setTimeout(() => this.leavePageWithoutAlert(), 150)
         return false
       } finally {
-        this.safeHideLoading()
+        await this.safeHideLoading()
       }
     },
 
@@ -390,6 +431,7 @@ export default {
     },
 
     onCateChange(e) {
+      if (this.formLocked) return
       const idx = Number(e.detail.value)
       this.cateIndex = idx
       const c = this.cateList[idx]
@@ -438,6 +480,7 @@ export default {
     },
 
     async chooseAndUploadCover(source = 'album') {
+      if (this.formLocked) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
         return
@@ -606,6 +649,7 @@ export default {
     },
 
     removeCover(i) {
+      if (this.formLocked) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
         return
@@ -617,6 +661,7 @@ export default {
     },
 
     addTag() {
+      if (this.formLocked) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
         return
@@ -630,6 +675,7 @@ export default {
       this.tagInput = ''
     },
     removeTag(i) {
+      if (this.formLocked) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
         return
@@ -638,6 +684,7 @@ export default {
     },
 
     addIngredient() {
+      if (this.formLocked) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
         return
@@ -649,6 +696,7 @@ export default {
       uni.hideKeyboard()
     },
     removeIngredient(i) {
+      if (this.formLocked) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
         return
@@ -657,6 +705,7 @@ export default {
     },
 
     addStep() {
+      if (this.formLocked) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
         return
@@ -668,6 +717,7 @@ export default {
       uni.hideKeyboard()
     },
     removeStep(i) {
+      if (this.formLocked) return
       if (!this.canManage) {
         uni.showToast({ title: '无权限：请登录管理员账号', icon: 'none' })
         return
@@ -711,7 +761,8 @@ export default {
     },
 
     async cleanupPendingCovers(fileIDs = this.newlyUploadedCoverIds) {
-      const ids = [...new Set(fileIDs)].filter(Boolean)
+      const protectedIDs = new Set([...getProtectedCreateCovers(), ...getProtectedEditCovers()])
+      const ids = [...new Set(fileIDs)].filter(id => id && !protectedIDs.has(id))
       if (!ids.length) return
 
       addPendingCleanup('food', ids)
@@ -722,10 +773,9 @@ export default {
         const result = await foodService.cleanupUploadedCoverFiles(ids, token)
         applyNewToken(result)
 
-        const failed = new Set(Array.isArray(result?.failedFileIDs) ? result.failedFileIDs : [])
-        const confirmed = result?.queued
-          ? ids
-          : ids.filter((id) => !failed.has(id))
+        const confirmedSet = new Set(Array.isArray(result?.confirmedFileIDs) ? result.confirmedFileIDs : [])
+        const confirmed = ids.filter((id) => confirmedSet.has(id))
+        if (result?.skipped) console.warn('部分待清理图片未处理：', result.skipReason, result.skippedFileIDs)
 
         removePendingCleanup('food', confirmed)
         this.newlyUploadedCoverIds = this.newlyUploadedCoverIds.filter((id) => !confirmed.includes(id))
@@ -743,7 +793,7 @@ export default {
 
     async leaveWithCleanup() {
       await this.cleanupPendingCovers()
-      uni.navigateBack({
+      await this.leavePageWithoutAlert({
         fail: () => {
           this.backLock = false
           uni.showToast({ title: '返回失败，请重试', icon: 'none' })
@@ -766,61 +816,114 @@ export default {
     },
 
     async onSubmit() {
-      if (this.submitting || this.uploading) return
+      if (this.createInitializing || this.leaveGuardLeaving || this.submitting || this.uploading) return
 
       const auth = this.ensureManageOrToast()
       if (!auth.ok) return
 
-      const msg = this.validate()
+      const msg = (this.pendingCreate || this.pendingEdit) ? '' : this.validate()
       if (msg) {
         uni.showToast({ title: msg, icon: 'none' })
         return
       }
 
-      const payload = this.normalizeForm(this.form)
+      const payload = this.pendingEdit ? this.pendingEdit.payload : (this.pendingCreate ? this.pendingCreate.payload : this.normalizeForm(this.form))
 
       this.safeShowLoading('提交中...')
       try {
         this.submitting = true
 
         if (this.mode === 'edit') {
-          // ✅ 传 token 给后端强校验
-          const result = await foodService.updateFood(this.foodId, payload, auth.token)
+          const uid = uni.getStorageSync('uni_id_uid') || ''
+          if (!uid || uid !== this.createOwnerUid) throw new Error('登录状态已变化，请重新进入编辑页')
+          if (!this.pendingEdit) {
+            const request = {
+              requestId: newFoodCreateId().replace(/^fc_/, 'fe_'),
+              expectedVersion: this.foodVersion,
+              payload: JSON.parse(JSON.stringify(payload)),
+              uploadedCoverIds: [...this.newlyUploadedCoverIds]
+            }
+            // 本地保护落盘后才允许请求发出；超时和页面重开都不释放保护。
+            saveFoodEditRequest(uid, this.foodId, request)
+            this.pendingEdit = request
+          }
+          const request = this.pendingEdit
+          const result = await foodService.updateFoodOnce(this.foodId, request.payload, auth.token, request.expectedVersion, request.requestId)
           applyNewToken(result)
+          if (!result?.terminal) throw new Error(result?.msg || '修改结果尚未确认，请重试确认')
+          if (Number(result.code) === 400 || Number(result.code) === 409) {
+            clearFoodEditRequest(uid, this.foodId, request.requestId)
+            this.pendingEdit = null
+            await this.safeHideLoading(true)
+            uni.showModal({
+              title: Number(result.code) === 409 ? '菜品已更新' : '本次修改未保存',
+              content: result.msg || '本次修改未保存，请先保留需要的内容，再重新打开编辑页。',
+              showCancel: false,
+              confirmText: '知道了'
+            })
+            return
+          }
+          if (!result?.updated || result.code) throw new Error(result?.msg || '保存失败，请重试')
+          this.foodVersion = result.version
+          // 先从清理队列移除已提交图片，再解除持久化保护。
+          removePendingCleanup('food', request.payload.cover_images || [])
+          clearFoodEditRequest(uid, this.foodId, request.requestId)
+          this.pendingEdit = null
           this.commitCurrentCovers()
 
           uni.setStorageSync('needRefreshFoodDetail', this.foodId)
           uni.setStorageSync('needRefreshFoods', 1)
-          this.safeHideLoading(true)
+          await this.safeHideLoading(true)
 
-          uni.showToast({ title: '修改成功', icon: 'success' })
-          setTimeout(() => uni.navigateBack(), 150)
+          await this.preparePageLeave()
+          uni.showToast({ title: result.replayed ? '已确认此前修改成功' : '修改成功', icon: 'success' })
+          setTimeout(() => this.leavePageWithoutAlert(), 150)
           return
         }
 
-        // ✅ 新增也要传 token（后端同样校验管理员）
-        const result = await foodService.addFood(payload, auth.token)
+        const uid = uni.getStorageSync('uni_id_uid') || ''
+        if (!uid || uid !== this.createOwnerUid) throw new Error('登录状态已变化，请重新进入新增页')
+        if (!this.pendingCreate) {
+          const request = {
+            requestId: this.createRequestId || newFoodCreateId(),
+            payload: JSON.parse(JSON.stringify(payload)),
+            uploadedCoverIds: [...this.newlyUploadedCoverIds]
+          }
+          // 持久化成功后才发送，超时、退页、重开都继续使用同一次提交。
+          saveFoodCreateRequest(uid, request)
+          this.createRequestId = request.requestId
+          this.pendingCreate = request
+        }
+        const result = await foodService.addFoodOnce(this.pendingCreate.payload, auth.token, this.pendingCreate.requestId)
         applyNewToken(result)
+        if (Number(result?.code) === 400) {
+          clearFoodCreateRequest(uid, this.pendingCreate.requestId)
+          this.pendingCreate = null
+          this.createRequestId = ''
+          throw new Error(result.msg || '请检查菜品内容')
+        }
+        if (Number(result?.code) !== 0 || !result?.id) throw new Error(result?.msg || '发布结果尚未确认，请重试确认')
+        removePendingCleanup('food', this.pendingCreate.payload.cover_images || [])
+        clearFoodCreateRequest(uid, this.pendingCreate.requestId)
+        this.pendingCreate = null
         this.commitCurrentCovers()
         uni.setStorageSync('needRefreshFoods', 1)
-        this.safeHideLoading(true)
-        uni.showToast({ title: '新增成功', icon: 'success' })
-        setTimeout(() => uni.navigateBack(), 150)
+        await this.safeHideLoading(true)
+        await this.preparePageLeave()
+        uni.showToast({ title: result.replayed ? '已确认此前发布成功' : '新增成功', icon: 'success' })
+        setTimeout(() => this.leavePageWithoutAlert(), 150)
       } catch (e) {
         console.error(e)
-        uni.showToast({ title: e?.message || '提交失败', icon: 'none' })
+        await this.safeHideLoading(true)
+        uni.showToast({ title: this.pendingEdit ? '修改结果待确认，请重试确认' : (this.pendingCreate ? (e?.message || '发布结果尚未确认，请重试确认') : (e?.message || '提交失败')), icon: 'none' })
       } finally {
-        this.safeHideLoading()
+        await this.safeHideLoading()
         this.submitting = false
       }
     },
 
     onCancel() {
       if (this.submitting || this.uploading) {
-        uni.showToast({
-          title: this.submitting ? '正在提交，请稍候' : '图片上传中，请稍候',
-          icon: 'none'
-        })
         return
       }
       if (this.backLock) return
@@ -828,7 +931,7 @@ export default {
         this.backLock = true
         uni.showModal({
           title: '提示',
-          content: '内容尚未保存，确定要离开吗？',
+          content: this.pendingEdit ? '修改结果尚未确认，离开后可重新进入此菜品编辑页继续确认。' : '内容尚未保存，确定要离开吗？',
           success: async (res) => {
             if (res.confirm) {
               await this.leaveWithCleanup()

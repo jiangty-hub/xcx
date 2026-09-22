@@ -19,6 +19,7 @@
 </template>
 
 <script>
+import { beginLoading } from '@/utils/loading.js'
 import notlogin from '@/components/notlogin.vue'
 import loggedin from '@/components/loggedin.vue'
 import {
@@ -26,12 +27,12 @@ import {
   checkManagePermission,
   clearAuthStorage,
   getAuthToken,
-  isAuthExpiredResult,
   resolveCloudFileToUrl
 } from '@/utils/auth.js'
 import { getPendingCleanup, removePendingCleanup } from '@/utils/pending-cleanup.js'
+import { getResumeRefreshState } from '@/utils/resume-refresh.js'
 
-const foodService = uniCloud.importObject('food-service')
+const foodService = uniCloud.importObject('food-service', { customUI: true })
 
 export default {
   components: { notlogin, loggedin },
@@ -46,12 +47,31 @@ export default {
       authOperation: '',
       refreshSeq: 0,
       refreshTask: null,
-      lastRefreshAt: 0
+      lastRefreshAt: 0,
+      lastResumeSeqHandled: 0
     }
   },
 
-  onShow() {
-    this.refresh()
+  onLoad() {
+    this.lastResumeSeqHandled = getResumeRefreshState(0).seq
+  },
+
+  async onShow() {
+    const resume = getResumeRefreshState(this.lastResumeSeqHandled)
+    if (resume.seq) this.lastResumeSeqHandled = resume.seq
+
+    if (resume.level >= 2) {
+      const authTask = getApp()?.globalData?.authRefreshTask
+      if (authTask) {
+        try {
+          await authTask
+        } catch (e) {
+          console.log('wait resume auth validation failed:', e)
+        }
+      }
+    }
+
+    await this.refresh({ force: resume.shouldRefresh })
   },
 
   methods: {
@@ -69,12 +89,12 @@ export default {
     },
 
     // ======= 刷新：先缓存秒开，再云端校验 token + 拉最新资料 =======
-    async refresh({ force = false } = {}) {
-      if (this.authOperation === 'logout') return
-      if (this.authOperation === 'login' && !force) return
+    async refresh({ force = false, silent = false } = {}) {
+      if (this.authOperation === 'logout') return { status: 'skipped' }
+      if (this.authOperation === 'login' && !force) return { status: 'skipped' }
 
       const token = getAuthToken()
-      if (!force && token && Date.now() - this.lastRefreshAt < 1000) return
+      if (!force && token && Date.now() - this.lastRefreshAt < 1000) return { status: 'skipped' }
       if (this.refreshTask) return this.refreshTask
 
       const seq = ++this.refreshSeq
@@ -82,7 +102,12 @@ export default {
       this.refreshTask = task
 
       try {
-        return await task
+        const result = await task
+        if (!silent && this.authOperation !== 'login') {
+          const toast = this.getRefreshToast(result)
+          if (toast) uni.showToast(toast)
+        }
+        return result
       } finally {
         if (this.refreshTask === task) {
           this.refreshTask = null
@@ -91,11 +116,13 @@ export default {
     },
 
     async performRefresh(token, seq) {
+      const result = { status: 'partial', profileLoaded: false, permissionLoaded: false }
+      if (seq !== this.refreshSeq) return { ...result, status: 'skipped' }
 
       // 0) 没 token：直接未登录
       if (!token) {
         if (seq === this.refreshSeq) this.clearLoginState()
-        return
+        return { ...result, status: 'expired', missingToken: true }
       }
 
       // 1) 有 token：先用缓存秒开（不闪）
@@ -111,79 +138,104 @@ export default {
           data: { token }
         })
         const r = res.result || {}
-        if (seq !== this.refreshSeq) return
+        if (seq !== this.refreshSeq) return { ...result, status: 'skipped' }
         applyNewToken(r)
 
         // token 失效：清理并回到未登录
-        if (isAuthExpiredResult(r)) {
+        if (Number(r.code) === 401) {
           this.clearLoginState()
-          return
+          return { ...result, status: 'expired' }
         }
 
         // 其他错误：不踢下线（减少误判），继续用缓存兜底
         if (r.code !== 0) {
           console.log('get-user-profile failed:', r)
-          if (!this.nickname) this.nickname = '用户'
-          return
+        } else {
+          const profile = r.profile || {}
+          const nextUid = r.uid || this.uid
+          const cloudNickname = (profile.nickname || '').trim()
+          const nextNickname = cloudNickname || this.nickname
+          const cloudAvatar = profile.avatar || ''
+          const avatarUrl = await resolveCloudFileToUrl(cloudAvatar)
+          if (seq !== this.refreshSeq) return { ...result, status: 'skipped' }
+
+          this.uid = nextUid
+          this.nickname = nextNickname
+          if (avatarUrl) {
+            this.avatar = avatarUrl
+          } else if (!cloudAvatar) {
+            // 云端明确为空：清空展示
+            this.avatar = ''
+          }
+          // 若 cloudAvatar 有值但转 URL 失败：不覆盖本地缓存，减少误判
+
+          // 写缓存（头像缓存可展示 URL）
+          uni.setStorageSync('uni_id_uid', this.uid)
+          uni.setStorageSync('uni_id_nickname', this.nickname || '')
+          if (this.avatar) uni.setStorageSync('uni_id_avatar', this.avatar)
+          else uni.removeStorageSync('uni_id_avatar')
+          result.profileLoaded = !cloudAvatar || !!avatarUrl
         }
-
-        const profile = r.profile || {}
-        const nextUid = r.uid || this.uid
-        const cloudNickname = (profile.nickname || '').trim()
-        const nextNickname = cloudNickname || this.nickname
-        const cloudAvatar = profile.avatar || ''
-        const avatarUrl = await resolveCloudFileToUrl(cloudAvatar)
-        if (seq !== this.refreshSeq) return
-
-        this.uid = nextUid
-        this.nickname = nextNickname
-        if (avatarUrl) {
-          this.avatar = avatarUrl
-        } else if (!cloudAvatar) {
-          // 云端明确为空：清空展示
-          this.avatar = ''
-        }
-        // 若 cloudAvatar 有值但转 URL 失败：不覆盖本地缓存，减少误判
-
-        // 写缓存（头像缓存可展示 URL）
-        uni.setStorageSync('uni_id_uid', this.uid)
-        uni.setStorageSync('uni_id_nickname', this.nickname || '')
-        if (this.avatar) uni.setStorageSync('uni_id_avatar', this.avatar)
-        else uni.removeStorageSync('uni_id_avatar')
       } catch (e) {
         // 网络/服务抖动：不踢下线，继续用缓存
         if (seq === this.refreshSeq) console.log('refresh error:', e)
       }
 
-      if (seq !== this.refreshSeq) return
+      if (seq !== this.refreshSeq) return { ...result, status: 'skipped' }
       if (!this.nickname) this.nickname = '用户'
-      await this.refreshPermission(seq)
-      if (seq === this.refreshSeq) this.lastRefreshAt = Date.now()
+      // 资料读取失败也继续校验权限，只有登录失效才结束流程。
+      const permission = await this.refreshPermission(seq)
+      if (permission.status === 'expired') return { ...result, status: 'expired' }
+      if (seq !== this.refreshSeq) return { ...result, status: 'skipped' }
+      result.permissionLoaded = permission.permissionLoaded
+      result.status = result.profileLoaded && result.permissionLoaded ? 'success' : 'partial'
+      this.lastRefreshAt = result.status === 'success' ? Date.now() : 0
+      return result
     },
 
     async refreshPermission(seq = this.refreshSeq) {
-      if (seq !== this.refreshSeq) return
+      if (seq !== this.refreshSeq) return { status: 'skipped', permissionLoaded: false }
       const token = getAuthToken()
       if (!token) {
-        this.canManage = false
-        return
+        this.clearLoginState()
+        return { status: 'expired', permissionLoaded: false }
       }
 
       try {
         const permission = await checkManagePermission(foodService, token)
-        if (seq !== this.refreshSeq) return
+        if (seq !== this.refreshSeq) return { status: 'skipped', permissionLoaded: false }
         if (permission.authExpired) {
           this.clearLoginState()
-          return
+          return { status: 'expired', permissionLoaded: false }
         }
         this.canManage = permission.canManage
         if (this.canManage) await this.retryPendingFoodCleanup()
+        return { status: 'success', permissionLoaded: true }
       } catch (e) {
-        if (seq !== this.refreshSeq) return
+        if (seq !== this.refreshSeq) return { status: 'skipped', permissionLoaded: false }
         this.canManage = false
         console.error('permission check failed:', e)
-        uni.showToast({ title: e?.message || '权限校验失败，请稍后重试', icon: 'none' })
+        return { status: 'partial', permissionLoaded: false }
       }
+    },
+
+    // 登录时由登录入口统一提示，普通页面刷新只提示异常。
+    getRefreshToast(result, login = false) {
+      if (!result || result.status === 'skipped') return null
+      if (result.status === 'expired') {
+        if (result.missingToken && !login) return null
+        return { title: '登录已失效，请重新登录', icon: 'none' }
+      }
+      if (!result.permissionLoaded) {
+        return {
+          title: login ? '已登录，管理权限获取失败，请稍后重试' : '管理权限获取失败，请稍后重试',
+          icon: 'none'
+        }
+      }
+      if (!result.profileLoaded) {
+        return { title: login ? '登录成功，资料暂未更新' : '资料暂未更新，请稍后重试', icon: 'none' }
+      }
+      return login ? { title: '登录成功', icon: 'success' } : null
     },
 
     async retryPendingFoodCleanup() {
@@ -193,8 +245,9 @@ export default {
       try {
         const result = await foodService.cleanupUploadedCoverFiles(ids, getAuthToken())
         applyNewToken(result)
-        const failed = new Set(Array.isArray(result?.failedFileIDs) ? result.failedFileIDs : [])
-        const confirmed = result?.queued ? ids : ids.filter((id) => !failed.has(id))
+        const confirmedSet = new Set(Array.isArray(result?.confirmedFileIDs) ? result.confirmedFileIDs : [])
+        const confirmed = ids.filter((id) => confirmedSet.has(id))
+        if (result?.skipped) console.warn('部分待清理图片未处理：', result.skipReason, result.skippedFileIDs)
         removePendingCleanup('food', confirmed)
       } catch (e) {
         console.error('retry pending food cover cleanup failed:', e)
@@ -208,26 +261,12 @@ export default {
       this.refreshSeq += 1
       this.refreshTask = null
       this.lastRefreshAt = 0
+      let toast = null
+      const stopLoading = beginLoading('登录中...')
 
       try {
-        uni.showLoading({ title: '登录中...' })
 
-        // 0) 获取微信用户信息（在点击链路里）
-        const profile = await new Promise((resolve, reject) => {
-          uni.getUserProfile({
-            desc: '用于完善用户资料',
-            success: resolve,
-            fail: reject
-          })
-        })
-
-        const ui = profile?.userInfo || {}
-        let nickName = ui.nickName || ui.nickname || ''
-        const avatarUrlFromWx = ui.avatarUrl || ui.avatar || ''
-
-        if (nickName === '微信用户') nickName = ''
-
-        // 1) 获取 code
+        // 1) 直接获取登录凭证，昵称和头像不作为登录前提
         const loginRes = await new Promise((resolve, reject) => {
           uni.login({
             provider: 'weixin',
@@ -235,6 +274,8 @@ export default {
             fail: reject
           })
         })
+
+        if (!loginRes.code) throw new Error('未获取到微信登录凭证，请重试')
 
         // 2) 调 uni-id-cf 登录
         const res = await uniCloud.callFunction({
@@ -253,89 +294,17 @@ export default {
         if (result.token) uni.setStorageSync('uni_id_token', result.token)
         if (result.uid) uni.setStorageSync('uni_id_uid', result.uid)
 
-        // 4) 先用微信头像作为展示缓存（秒出效果）
-        if (avatarUrlFromWx) {
-          this.avatar = avatarUrlFromWx
-          uni.setStorageSync('uni_id_avatar', avatarUrlFromWx)
-        }
-
-        // 5) 云端是否已有 nickname？
-        let cloudNickname = ''
-        try {
-          const pRes = await uniCloud.callFunction({
-            name: 'get-user-profile',
-            data: { token: getAuthToken() }
-          })
-          const pr = pRes.result || {}
-          applyNewToken(pr)
-          if (pr.code === 0) cloudNickname = pr.profile?.nickname || ''
-        } catch (e) {
-          console.log('get-user-profile in login failed:', e)
-        }
-
-        if (cloudNickname) {
-          uni.setStorageSync('uni_id_nickname', cloudNickname)
-        } else if (nickName) {
-          // 初始化昵称（云端没昵称时）
-          const uRes = await uniCloud.callFunction({
-            name: 'update-user-profile',
-            data: { token: getAuthToken(), nickname: nickName }
-          })
-          const ur = uRes.result || {}
-          applyNewToken(ur)
-          if (ur.code === 0) uni.setStorageSync('uni_id_nickname', nickName)
-        } else {
-          await this.promptSetNickname(getAuthToken())
-        }
-
-        await this.refresh({ force: true })
-        uni.showToast({ title: '登录成功', icon: 'success' })
+        // 4) 读取已有资料；未设置时使用默认展示，可在“修改资料”中完善
+        const refreshResult = await this.refresh({ force: true, silent: true })
+        toast = this.getRefreshToast(refreshResult, true)
       } catch (e) {
         console.error(e)
-        uni.showToast({ title: e.message || '登录失败', icon: 'none' })
+        toast = { title: e?.message || e?.errMsg || '登录失败', icon: 'none' }
       } finally {
-        uni.hideLoading()
+        await stopLoading()
         this.authOperation = ''
       }
-    },
-
-    // 首次设置昵称（弹窗输入）
-    async promptSetNickname(token) {
-      return new Promise((resolve) => {
-        uni.showModal({
-          title: '设置昵称',
-          editable: true,
-          placeholderText: '请输入你的昵称',
-          confirmText: '保存',
-          success: async (r) => {
-            try {
-              if (r.confirm) {
-                const name = (r.content || '').trim()
-                if (!name) {
-                  uni.showToast({ title: '昵称不能为空', icon: 'none' })
-                  resolve()
-                  return
-                }
-                const res = await uniCloud.callFunction({
-                  name: 'update-user-profile',
-                  data: { token, nickname: name }
-                })
-                const rr = res.result || {}
-                applyNewToken(rr)
-                if (rr.code !== 0) throw new Error(rr.msg || '保存失败')
-
-                uni.setStorageSync('uni_id_nickname', name)
-              }
-            } catch (e) {
-              console.error(e)
-              uni.showToast({ title: e.message || '保存昵称失败', icon: 'none' })
-            } finally {
-              resolve()
-            }
-          },
-          fail: () => resolve()
-        })
-      })
+      if (toast) uni.showToast(toast)
     },
 
     // ======= 退出登录 =======

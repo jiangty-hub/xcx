@@ -9,15 +9,18 @@ const db = uniCloud.database()
 const dbCmd = db.command
 const usersDB = db.collection('uni-id-users')
 const deviceDB = db.collection('uni-id-device')
-exports.main = async (event, context) => {
-	console.log({
-		context
-	});
+async function handleRequest(event, context) {
+	// 家用菜谱使用菜品管理员白名单，不开放账号体系管理员初始化。
+	if (event && event.action === 'registerAdmin') {
+		return {
+			code: 403,
+			msg: '管理员初始化入口已关闭'
+		}
+	}
 	//UNI_WYQ:这里的uniID换成新的，保证多人访问不会冲突
 	uniID = uniID.createInstance({
 		context
 	})
-	console.log('event : ' + JSON.stringify(event))
 	/*
 	1.event为客户端 uniCloud.callFunction填写的data的值，这里介绍一下其中的属性
 		action：表示要执行的任务名称、比如：登录login、退出登录 logout等
@@ -48,9 +51,9 @@ exports.main = async (event, context) => {
 		用户就这样轻易地伪造了他人的uid传递给服务端，有一句话叫：前端传来的数据都是不可信任的
 		所以这里我们需要将uniID.checkToken返回的uid写入到params.uid
 	*/
-	let noCheckAction = ['register', 'checkToken', 'login', 'logout', 'sendSmsCode', 'getNeedCaptcha',
+	let noCheckAction = ['register', 'checkToken', 'login', 'logout', 'getNeedCaptcha',
 		'createCaptcha', 'verifyCaptcha', 'refreshCaptcha', 'inviteLogin', 'loginByWeixin',
-		'loginByUniverify', 'loginByApple', 'loginBySms', 'resetPwdBySmsCode', 'registerAdmin'
+		'loginByUniverify', 'loginByApple'
 	]
 	if (!noCheckAction.includes(action)) {
 		if (!uniIdToken) {
@@ -113,7 +116,6 @@ exports.main = async (event, context) => {
 			}
 			if (res.type == 'login') {
 				if (Object.keys(deviceInfo).length) {
-					console.log(context.DEVICEID);
 					//避免重复新增设备信息，先判断是否已存在
 					let getDeviceRes = await deviceDB.where({
 						"device_id": context.DEVICEID
@@ -201,10 +203,8 @@ exports.main = async (event, context) => {
 				uid: params.uid,
 				sessionKey: getSessionKey.sessionKey
 			})
-			console.log(res);
 			break;
 		case 'bindMobileByMpWeixin':
-			console.log(params);
 			let getSessionKeyRes = await uniID.getUserInfo({
 				uid: params.uid,
 				field: ['sessionKey']
@@ -213,12 +213,10 @@ exports.main = async (event, context) => {
 				return getSessionKeyRes
 			}
 			let sessionKey = getSessionKeyRes.userInfo.sessionKey
-			console.log(getSessionKeyRes);
 			res = await uniID.wxBizDataCrypt({
 				...params,
 				sessionKey
 			})
-			console.log(res);
 			if (res.code) {
 				return res
 			}
@@ -226,7 +224,6 @@ exports.main = async (event, context) => {
 				uid: params.uid,
 				mobile: res.purePhoneNumber
 			})
-			console.log(res);
 			break;
 		case 'bindMobileByUniverify':
 			let {
@@ -247,48 +244,6 @@ exports.main = async (event, context) => {
 				})
 				res.mobile = univerifyRes.phoneNumber
 			}
-			break;
-		case 'bindMobileBySms':
-			if(!(/^1\d{10}$/.test(params.mobile))){
-				return {
-					code: 401,
-					msg: '手机号格式错误'
-				}
-			}
-			if(!params.code){
-				return {
-					code: 401,
-					msg: '短信验证码不能为空'
-				}
-			}
-			needCaptcha = await isNeedCaptcha()
-			console.log(needCaptcha)
-			if(needCaptcha){
-				let {captcha} = params
-				if(!captcha){
-					return {
-						errCode: 'CAPTCHA_REQUIRED',
-						errMsg: '操作失败达到2次，请提交验证码'
-					}
-				}
-				res = await uniCaptcha.verify({
-					captcha,
-					scene: action
-				})
-				console.log(8956,res);
-				if(res.code != 0){
-					console.log(res,action);
-					return res
-				}
-			}
-			
-			res = await uniID.bindMobile({
-				uid: params.uid,
-				mobile: params.mobile,
-				code: params.code
-			})
-			uniIdLog(res)
-			console.log(res);
 			break;
 		case 'register':
 			var {
@@ -341,7 +296,6 @@ exports.main = async (event, context) => {
 		case 'login':
 			let passed = false;
 			needCaptcha = await isNeedCaptcha();
-			console.log('needCaptcha', needCaptcha);
 			if (needCaptcha) {
 				res = await uniCaptcha.verify({
 					...params,
@@ -422,7 +376,6 @@ exports.main = async (event, context) => {
 						uid: loginRes.uid,
 						sessionKey: loginRes.sessionKey
 					})
-					console.log(resUpdateUser);
 				}
 				delete loginRes.openid
 				delete loginRes.sessionKey
@@ -433,9 +386,7 @@ exports.main = async (event, context) => {
 			return loginRes
 			break;
 		case 'loginByUniverify':
-			console.error(params)
 			res = await uniID.loginByUniverify(params)
-			console.log(999999999,res)
 			await uniIdLog(res)
 			break;
 		case 'loginByApple':
@@ -452,107 +403,6 @@ exports.main = async (event, context) => {
 			}).update({
 				"tokenExpired": Date.now()
 			})
-			break;
-		case 'sendSmsCode':
-			/* -开始- 测试期间，为节约资源。统一虚拟短信验证码为： 123456；开启以下代码块即可  */
-			res = uniID.setVerifyCode({
-				mobile: params.mobile,
-				code: '123456',
-				type: params.type
-			})
-			return {
-				...res,
-				code: 40000,
-					msg:
-					"已启动测试模式，直接使用：123456作为短信验证码即可。正式项目，请配置/common/uni-config-center/uni-id/config.json（service->sm中的密钥信息）并在uni-id-cf完成配置 "
-			}
-			/* -结束- */
-
-			// 简单限制一下客户端调用频率
-			const ipLimit = await db.collection('opendb-verify-codes').where({
-				ip: context.CLIENTIP,
-				created_at: dbCmd.gt(Date.now() - 60000)
-			}).get()
-			if (ipLimit.data.length > 0) {
-				return {
-					code: 429,
-					msg: '请求过于频繁'
-				}
-			}
-			const templateId = '11753' // 替换为自己申请的模板id
-			if (!templateId) {
-				return {
-					code: 500,
-					msg: 'sendSmsCode需要传入自己的templateId，参考https://uniapp.dcloud.net.cn/uniCloud/uni-id?id=sendsmscode'
-				}
-			}
-			const randomStr = '00000' + Math.floor(Math.random() * 1000000)
-			const code = randomStr.substring(randomStr.length - 6)
-			res = await uniID.sendSmsCode({
-				mobile: params.mobile,
-				code,
-				type: params.type,
-				templateId
-			})
-			break;
-		case 'loginBySms':
-			needCaptcha = await  isNeedCaptcha()
-			if(needCaptcha){
-				let {captcha} = params
-				if(!captcha){
-					return {
-						errCode: 'CAPTCHA_REQUIRED',
-						errMsg: '操作失败达到2次，请提交验证码'
-					}
-				}
-				res = await uniCaptcha.verify({
-					captcha,
-					scene: action
-				})
-				if(res.code != 0){
-					console.log(res,action);
-					return res
-				}
-			}
-			if (!params.code) {
-				return {
-					code: 500,
-					msg: '请填写验证码'
-				}
-			}
-			if (!/^1\d{10}$/.test(params.mobile)) {
-				return {
-					code: 500,
-					msg: '手机号码填写错误'
-				}
-			}
-			res = await uniID.loginBySms(params)
-			await uniIdLog(res)
-			break;
-		case 'resetPwdBySmsCode':
-			if (!params.code) {
-				return {
-					code: 500,
-					msg: '请填写验证码'
-				}
-			}
-			if (!/^1\d{10}$/.test(params.mobile)) {
-				return {
-					code: 500,
-					msg: '手机号码填写错误'
-				}
-			}
-			params.type = 'login'
-			let loginBySmsRes = await uniID.loginBySms(params)
-			// console.log(loginBySmsRes);
-			if (loginBySmsRes.code === 0) {
-				res = await uniID.resetPwd({
-					password: params.password,
-					"uid": loginBySmsRes.uid
-				})
-			} else {
-				return loginBySmsRes
-			}
 			break;
 		case 'getInviteCode':
 			res = await uniID.getUserInfo({
@@ -588,61 +438,18 @@ exports.main = async (event, context) => {
 			}
 			break;
 		case 'closeAccount':
-			console.log(params.uid, '-----------------------');
 			res = await uniID.closeAccount({
 				uid: params.uid
 			});
 			break;
 
 			// =========================== admin api start =========================
-		case 'registerAdmin': {
-			var {
-				username,
-				password
-			} = params
-			let {
-				total
-			} = await db.collection('uni-id-users').where({
-				role: 'admin'
-			}).count()
-			if (total) {
-				return {
-					code: 10001,
-					message: '超级管理员已存在，请登录...'
-				}
-			}
-			const appid = params.appid
-			const appName = params.appName
-			delete params.appid
-			delete params.appName
-			res = await uniID.register({
-				username,
-				password,
-				role: ["admin"]
-			})
-			if (res.code === 0) {
-				const app = await db.collection('opendb-app-list').where({
-					appid
-				}).count()
-				if (!app.total) {
-					await db.collection('opendb-app-list').add({
-						appid,
-						name: appName,
-						description: "admin 管理后台",
-						create_date: Date.now()
-					})
-				}
-
-			}
-			break;
-		}
 		case 'registerUser': {
 			const {
 				userInfo
 			} = await uniID.getUserInfo({
 				uid: params.uid
 			})
-      console.error('getUserInfo',userInfo);
 			if (userInfo.role.indexOf('admin') === -1) {
 				res = {
 					code: 403,
@@ -771,4 +578,58 @@ exports.main = async (event, context) => {
 	}
 	//返回数据给客户端
 	return res
+}
+
+
+// 操作名称来自固定白名单；未知 action 不能原样写入日志。
+const LOG_ACTIONS = new Set([
+  "registerAdmin",
+  "renewDeviceTokenExpired",
+  "refreshSessionKey",
+  "bindMobileByMpWeixin",
+  "bindMobileByUniverify",
+  "register",
+  "getNeedCaptcha",
+  "login",
+  "loginByWeixin",
+  "loginByUniverify",
+  "loginByApple",
+  "checkToken",
+  "logout",
+  "getInviteCode",
+  "getInvitedUser",
+  "updatePwd",
+  "createCaptcha",
+  "refreshCaptcha",
+  "getUserInviteCode",
+  "closeAccount",
+  "registerUser",
+  "updateUser",
+  "getCurrentUserInfo",
+  "managerMultiTag"
+])
+
+exports.main = async (event, context) => {
+  const startedAt = Date.now()
+  let outcome = 'exception'
+  let code = null
+  try {
+    const result = await handleRequest(event, context)
+    outcome = 'returned'
+    // 只记录数值结果码，不打印响应、msg 或异常对象。
+    const value = result?.code
+    if (typeof value === 'number' && Number.isFinite(value)) code = value
+    else if (typeof value === 'string' && /^-?\d{1,9}$/.test(value)) code = Number(value)
+    return result
+  } finally {
+    // 日志故障不能改变登录返回结果；不记录 event/context、用户标识或凭证。
+    try {
+      console.info('uni-id-cf', {
+        action: LOG_ACTIONS.has(event?.action) ? event.action : 'unknown',
+        outcome,
+        code,
+        durationMs: Math.max(0, Date.now() - startedAt)
+      })
+    } catch (_) {}
+  }
 }

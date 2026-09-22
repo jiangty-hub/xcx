@@ -105,9 +105,11 @@
 </template>
 
 <script>
+import { beginLoading } from '@/utils/loading.js'
 import { applyNewToken, checkManagePermission, getAuthToken } from '@/utils/auth.js'
+import { getResumeRefreshState } from '@/utils/resume-refresh.js'
 
-const foodService = uniCloud.importObject('food-service')
+const foodService = uniCloud.importObject('food-service', { customUI: true })
 
 export default {
   data() {
@@ -120,11 +122,13 @@ export default {
 
       // ✅ 权限
       canManage: false,
-      isFirstShow: true
+      isFirstShow: true,
+      lastResumeSeqHandled: 0
     }
   },
 
   async onLoad(options) {
+    this.lastResumeSeqHandled = getResumeRefreshState(0).seq
     const id = options.id
     if (!id) {
       this.loading = false
@@ -139,10 +143,18 @@ export default {
 
   // 编辑页保存后返回详情页：自动刷新当前菜品
   async onShow() {
+    const resume = getResumeRefreshState(this.lastResumeSeqHandled)
+    if (resume.seq) this.lastResumeSeqHandled = resume.seq
+    let refreshedOnResume = false
+    if (resume.shouldRefresh && this.foodId) {
+      await this.getDishDetailById(this.foodId)
+      refreshedOnResume = true
+    }
+
     const needId = uni.getStorageSync('needRefreshFoodDetail')
     if (needId && needId === this.foodId) {
       uni.removeStorageSync('needRefreshFoodDetail')
-      await this.getDishDetailById(this.foodId)
+      if (!refreshedOnResume) await this.getDishDetailById(this.foodId)
     }
     // 首次进入时 onLoad 已校验权限，避免 onShow 再发一遍相同请求。
     if (this.isFirstShow) {
@@ -155,9 +167,6 @@ export default {
 
   computed: {
     dishImages() {
-      const a = this.cid_info?.images
-      if (Array.isArray(a) && a.length) return a
-
       const u = this.cid_info?.cover_urls
       if (Array.isArray(u) && u.length) return u
 
@@ -248,13 +257,14 @@ export default {
             this.deleting = false
             return
           }
+          const stopLoading = beginLoading('删除中...')
           try {
-            uni.showLoading({ title: '删除中...' })
 
             const token = this.getToken()
             const result = await foodService.deleteFood(this.foodId, token) // ✅ 传 token 给后端校验
             applyNewToken(result)
 
+            await stopLoading()
             const cleanup = result?.cleanup || {}
             if (cleanup.error || cleanup.skipped) {
               uni.showToast({ title: '菜品已删除，部分旧图片未清理', icon: 'none' })
@@ -271,10 +281,11 @@ export default {
               uni.reLaunch({ url: '/pages/category/category' })
             }
           } catch (e) {
+            await stopLoading()
             uni.showToast({ title: e?.message || '删除失败', icon: 'none' })
             console.error(e)
           } finally {
-            uni.hideLoading()
+            await stopLoading()
             this.deleting = false
           }
         },

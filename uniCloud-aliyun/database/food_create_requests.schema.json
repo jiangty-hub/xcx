@@ -1,0 +1,15 @@
+{
+  "bsonType": "object",
+  "description": "新增菜品去重记录；仅云对象读写，不与菜品删除或日志清理一起删除",
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "required": ["ownerUid", "payloadHash", "foodId", "createdAt"],
+  "properties": {
+    "_id": { "description": "用户 UID 与本次提交编号的 SHA-256；使用内置唯一性" },
+    "ownerUid": { "bsonType": "string" },
+    "payloadHash": { "bsonType": "string" },
+    "foodId": { "bsonType": "string", "description": "首次成功创建的 foods._id" },
+    "resultCode": { "bsonType": "int", "description": "0 表示已创建；400 表示明确拒绝，重试不能改变终态" },
+    "message": { "bsonType": "string", "description": "明确拒绝的原因" },
+    "createdAt": { "bsonType": "timestamp" }
+  }
+}

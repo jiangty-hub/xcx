@@ -1,3 +1,6 @@
+import { getProtectedCreateCovers } from '@/utils/food-create-request.js'
+import { getProtectedEditCovers } from '@/utils/food-edit-request.js'
+
 const STORAGE_KEYS = {
   food: 'pending_food_cover_cleanup',
   avatar: 'pending_avatar_cleanup'
@@ -27,18 +30,20 @@ function normalizeIDs(value) {
 }
 
 export function getPendingCleanup(type) {
-  return normalizeIDs(uni.getStorageSync(storageKey(type)))
+  const ids = normalizeIDs(uni.getStorageSync(storageKey(type)))
+  const protectedIDs = new Set(type === 'food' ? [...getProtectedCreateCovers(), ...getProtectedEditCovers()] : [])
+  return ids.filter(id => !protectedIDs.has(id))
 }
 
 export function addPendingCleanup(type, fileIDs) {
-  const next = normalizeIDs([...getPendingCleanup(type), ...normalizeIDs(fileIDs)])
+  const next = normalizeIDs([...normalizeIDs(uni.getStorageSync(storageKey(type))), ...normalizeIDs(fileIDs)])
   uni.setStorageSync(storageKey(type), next)
   return next
 }
 
 export function removePendingCleanup(type, fileIDs) {
   const removed = new Set(normalizeIDs(fileIDs))
-  const next = getPendingCleanup(type).filter((id) => !removed.has(id))
+  const next = normalizeIDs(uni.getStorageSync(storageKey(type))).filter((id) => !removed.has(id))
   if (next.length) uni.setStorageSync(storageKey(type), next)
   else uni.removeStorageSync(storageKey(type))
   return next

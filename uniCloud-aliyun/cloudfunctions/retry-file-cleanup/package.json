@@ -1,4 +1,15 @@
 {
   "name": "retry-file-cleanup",
-  "dependencies": {}
+  "dependencies": {},
+  "cloudfunction-config": {
+    "memorySize": 512,
+    "timeout": 600,
+    "triggers": [
+      {
+        "name": "retry_file_cleanup_weekly",
+        "type": "timer",
+        "config": "0 17 3 * * 1 *"
+      }
+    ]
+  }
 }

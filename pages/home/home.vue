@@ -4,29 +4,36 @@
 		<view class="search-box">
 			<my-search @click="gotoSearch"></my-search>
 		</view>
-		<view v-if="homeLoading" class="home-state">首页加载中...</view>
-		<view v-else-if="homeError" class="home-state error-state">
-			<text>{{ homeError }}</text>
-			<button size="mini" @click="loadHome">重试</button>
-		</view>
-		<view
-			v-else-if="!homePartialError && !swiperList.length && !navList.length && !floorList.length"
-			class="home-state"
-		>
-			暂无首页内容
-		</view>
-		<block v-else>
-		<view v-if="homePartialError" class="partial-error">
-			<text>{{ homePartialError }}</text>
-			<button size="mini" @click="loadHome">重试</button>
-		</view>
+		<view v-if="homeEmpty" class="home-state">暂无首页内容</view>
 		<!--轮播图区域-->
+		<view
+			v-if="!swiperList.length && (!sections.banner.loaded || sections.banner.loading || sections.banner.error)"
+			class="section-state banner-state"
+		>
+			<text>{{ sections.banner.error || '轮播图加载中...' }}</text>
+			<button v-if="sections.banner.error" size="mini" @click="loadSection('banner')">重试</button>
+		</view>
+		<view v-else-if="swiperList.length && sections.banner.error" class="partial-error">
+			<text>{{ sections.banner.error }}，当前显示已有内容</text>
+			<button size="mini" @click="loadSection('banner')">重试</button>
+		</view>
 		<swiper v-if="swiperList.length" :indicator-dots="true" :autoplay="true" :interval="3000" :duration="1000" :circular="true">
 			<swiper-item class="swiper-item" v-for="(item, i) in swiperList" :key="i">
 				<image :src="item.image_src"></image>
 			</swiper-item>
 		</swiper>
 		<!--分类导航区域-->
+		<view
+			v-if="!navList.length && (!sections.icon.loaded || sections.icon.loading || sections.icon.error)"
+			class="section-state icon-state"
+		>
+			<text>{{ sections.icon.error || '分类导航加载中...' }}</text>
+			<button v-if="sections.icon.error" size="mini" @click="loadSection('icon')">重试</button>
+		</view>
+		<view v-else-if="navList.length && sections.icon.error" class="partial-error">
+			<text>{{ sections.icon.error }}，当前显示已有内容</text>
+			<button size="mini" @click="loadSection('icon')">重试</button>
+		</view>
 		<view class="nav-list" v-if="navList.length">
 			<view class="nav-item" v-for="(item, i) in navList" :key="i" @click="nacClickHandler(item)">
 				<view class="nav-icon-box">
@@ -36,6 +43,17 @@
 			</view>
 		</view>
 		<!--拿手好菜区域-->
+		<view
+			v-if="!floorList.length && (!sections.floor.loaded || sections.floor.loading || sections.floor.error)"
+			class="section-state floor-state"
+		>
+			<text>{{ sections.floor.error || '拿手好菜加载中...' }}</text>
+			<button v-if="sections.floor.error" size="mini" @click="loadSection('floor')">重试</button>
+		</view>
+		<view v-else-if="floorList.length && sections.floor.error" class="partial-error">
+			<text>{{ sections.floor.error }}，当前显示已有内容</text>
+			<button size="mini" @click="loadSection('floor')">重试</button>
+		</view>
 		<view class="floor-list" v-if="floorList.length">
 			<!--拿手好菜名字-->
 			<text class="floor-text">◆拿手好菜</text>
@@ -56,11 +74,18 @@
 				</view>
 			</view>
 		</view>
-		</block>
 	</view>
 </template>
 
 <script>
+	import { getResumeRefreshState } from '@/utils/resume-refresh.js'
+
+	const HOME_SECTIONS = {
+		banner: { target: 'swiperList', method: 'getBanner', label: '轮播图' },
+		icon: { target: 'navList', method: 'getIcon', label: '分类导航' },
+		floor: { target: 'floorList', method: 'getFloor', label: '拿手好菜' }
+	}
+
 	export default {
 		data() {
 			return {
@@ -70,49 +95,54 @@
 				navList: [],
 				//拿手菜系数组
 				floorList: [],
-				homeLoading: true,
-				homeError: '',
-				homePartialError: ''
+				sections: {
+					banner: { loading: false, loaded: false, error: '' },
+					icon: { loading: false, loaded: false, error: '' },
+					floor: { loading: false, loaded: false, error: '' }
+				},
+				lastResumeSeqHandled: 0
+			}
+		},
+		computed: {
+			homeEmpty() {
+				return Object.keys(HOME_SECTIONS).every(key => {
+					const state = this.sections[key]
+					return state.loaded && !state.loading && !state.error &&
+						!this[HOME_SECTIONS[key].target].length
+				})
 			}
 		},
 		onLoad() {
+			this.lastResumeSeqHandled = getResumeRefreshState(0).seq
 			this.loadHome()
+		},
+		async onShow() {
+			const resume = getResumeRefreshState(this.lastResumeSeqHandled)
+			if (resume.seq) this.lastResumeSeqHandled = resume.seq
+			if (resume.shouldRefresh) await this.loadHome()
 		},
 		methods: {
 		  async loadHome() {
-			this.homeLoading = true
-			this.homeError = ''
-			this.homePartialError = ''
+			// 各区域在自己的请求结束时立即更新，汇总等待不控制页面展示。
+			await Promise.all(Object.keys(HOME_SECTIONS).map(key => this.loadSection(key)))
+		  },
+		  async loadSection(key) {
+			const config = HOME_SECTIONS[key]
+			if (!config) return
+			const state = this.sections[key]
+			// 避免重试连点或后台恢复重复请求同一区域。
+			if (state.loading) return
+			state.loading = true
+			state.error = ''
 			try {
-				const results = await Promise.allSettled([
-					this.getBanner(),
-					this.getIcon(),
-					this.getFloor()
-				])
-				const targets = ['swiperList', 'navList', 'floorList']
-				const labels = ['轮播图', '分类导航', '拿手好菜']
-				const failedLabels = []
-
-				results.forEach((result, index) => {
-					if (result.status === 'fulfilled') {
-						this[targets[index]] = result.value
-					} else {
-						this[targets[index]] = []
-						failedLabels.push(labels[index])
-						console.error(`${labels[index]} load failed:`, result.reason)
-					}
-				})
-
-				if (failedLabels.length === results.length) {
-					this.homeError = '首页加载失败'
-				} else if (failedLabels.length) {
-					this.homePartialError = `${failedLabels.join('、')}加载失败`
-				}
-			} catch (err) {
-				console.error('load home failed:', err)
-				this.homeError = err?.message || '首页加载失败'
+				this[config.target] = await this[config.method]()
+				state.loaded = true
+			} catch (error) {
+				// 刷新失败保留已有内容，首次失败只影响当前区域。
+				state.error = config.label + '加载失败'
+				console.error(config.label + ' load failed:', error)
 			} finally {
-				this.homeLoading = false
+				state.loading = false
 			}
 		  },
 		  async getBanner() {
@@ -128,7 +158,8 @@
 		  async getFloor() {
 		    const res = await uniCloud.callFunction({ name: 'getFloor' })
 			if (res.result?.code !== 0) throw new Error(res.result?.msg || '图片加载失败')
-			return Array.isArray(res.result?.data) ? res.result.data : []
+			const groups = Array.isArray(res.result?.data) ? res.result.data : []
+			return groups.filter(group => Array.isArray(group) && group.length)
 		  },
 		  getFloorImage(group, index) {
 		  	const defaultImg = '/static/cover-default.png'
@@ -247,9 +278,19 @@ swiper {
 	gap: 24rpx;
 	color: #999;
 }
-.error-state {
-	color: #666;
+.section-state {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 20rpx;
+	background: #f6f6f6;
+	color: #999;
+	font-size: 26rpx;
 }
+.banner-state { min-height: 330rpx; }
+.icon-state { min-height: 220rpx; }
+.floor-state { min-height: 445rpx; }
 .partial-error {
 	display: flex;
 	align-items: center;
