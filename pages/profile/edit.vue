@@ -1,27 +1,30 @@
 <template>
-  <view class="page">
+  <view class="profile-page">
+    <view class="profile-heading">
+      <view class="heading-row"><text class="heading-title">个人资料</text><image v-if="!badgeFailed" class="chef-badge" src="/static/detail/chef-badge.png" mode="aspectFit" @error="badgeFailed = true" /></view>
+      <text class="heading-subtitle">换个头像，认识一下</text>
+    </view>
     <view v-if="!profileReady" class="init-state">
       <text>{{ initError || '资料加载中，请稍候...' }}</text>
-      <button v-if="initError" size="mini" :disabled="initializing" @click="initializeProfile">重试</button>
+      <button v-if="initError" class="retry-button" size="mini" :disabled="initializing" @click="initializeProfile">重试</button>
     </view>
-    <view class="card">
-      <text class="label">头像</text>
-
+    <view class="profile-card">
+      <text class="field-label">头像</text>
       <view class="avatar-row">
-        <image
-          class="avatar"
-          :src="avatarPreview || '/static/avatar-default.png'"
-          mode="aspectFill"
-        />
-        <button class="mini" size="mini" :loading="avatarUploading" :disabled="formDisabled" @click="chooseAvatar">更换头像</button>
-        <button class="mini" size="mini" :disabled="formDisabled" @click="clearAvatar">清除头像</button>
+        <image class="avatar" :src="!avatarFailed && avatarPreview ? avatarPreview : '/static/avatar-default.png'" mode="aspectFill" @error="avatarFailed = true" />
+        <view class="avatar-actions">
+          <button class="avatar-button change-button" :loading="avatarUploading" :disabled="formDisabled" @click="chooseAvatar"><text v-if="!avatarUploading" class="picture-icon" aria-hidden="true">▧</text><text>{{ avatarUploading ? '处理中...' : '更换头像' }}</text></button>
+          <button class="avatar-button clear-button" :disabled="formDisabled" @click="clearAvatar"><view class="trash-icon" aria-hidden="true"><view /></view><text>清除头像</text></button>
+        </view>
       </view>
-
-      <text class="label">昵称</text>
-      <input class="input" v-model="nickname" :disabled="formDisabled" @input="nicknameEdited = true" placeholder="请输入昵称" maxlength="20" />
-
-      <button class="btn" type="primary" :loading="saving" :disabled="formDisabled" @click="save">保存</button>
+      <text v-if="avatarChanged && !avatarUploading" class="avatar-hint">{{ avatarFileId ? '新头像已上传，保存后生效' : '头像已清除，保存后生效' }}</text>
+      <view class="nickname-section">
+        <text class="field-label">昵称</text>
+        <input class="nickname-input" v-model="nickname" :disabled="formDisabled" @input="nicknameEdited = true" placeholder="请输入昵称" placeholder-class="nickname-placeholder" maxlength="20" :cursor-spacing="32" confirm-type="done" />
+        <button class="save-button" :loading="saving" :disabled="formDisabled" @click="save">{{ saving ? '保存中...' : '保存' }}</button>
+      </view>
     </view>
+    <view class="paw-decoration" aria-hidden="true"><view class="paw paw-one"><view class="toe toe-a" /><view class="toe toe-b" /><view class="toe toe-c" /><view class="toe toe-d" /><view class="paw-pad" /></view><view class="paw paw-two"><view class="toe toe-a" /><view class="toe toe-b" /><view class="toe toe-c" /><view class="toe toe-d" /><view class="paw-pad" /></view></view>
   </view>
 </template>
 
@@ -56,6 +59,8 @@ export default {
   data() {
     return {
       initializing: false,
+      avatarFailed: false,
+      badgeFailed: false,
       profileReady: false,
       initError: '',
       pageDisposed: false,
@@ -70,6 +75,8 @@ export default {
       saving: false
     }
   },
+
+  watch: { avatarPreview() { this.avatarFailed = false } },
 
   async onLoad() {
     // 1) 缓存秒开
@@ -191,7 +198,7 @@ export default {
         })
 
         const localPath = chooseRes.tempFilePaths?.[0]
-        if (!localPath) return
+        if (!localPath || this.pageDisposed) return
 
         // 立刻预览
         this.avatarPreview = localPath
@@ -215,6 +222,8 @@ export default {
         this.avatarChanged = true
         this.pendingAvatarFileIds.push(this.avatarFileId)
         addPendingCleanup(this.avatarCleanupType, [this.avatarFileId])
+        // Persist a completed upload even after leaving; clean it through the existing queue.
+        if (this.pageDisposed) return
 
         // 将 fileID 转 temp url（避免本地临时路径失效）
         if (this.avatarFileId) {
@@ -225,12 +234,14 @@ export default {
           } catch (e) {
             console.error('resolve uploaded avatar failed:', e)
           }
+          if (this.pageDisposed) return
           if (url) this.avatarPreview = url
         }
 
         await stopLoading()
-        uni.showToast({ title: '头像已上传', icon: 'success' })
+        if (!this.pageDisposed) uni.showToast({ title: '头像已上传，请保存', icon: 'none' })
       } catch (e) {
+        if (this.pageDisposed) return
         this.avatarPreview = previousPreview
         this.avatarFileId = previousFileId
         this.avatarChanged = previousChanged
@@ -307,6 +318,8 @@ export default {
         if (this.avatarPreview) uni.setStorageSync('uni_id_avatar', this.avatarPreview)
         else uni.removeStorageSync('uni_id_avatar')
 
+        if (this.pageDisposed) return
+
         // ✅ 通知上一页刷新
         const ec = this.getOpenerEventChannel && this.getOpenerEventChannel()
         ec && ec.emit('profileUpdated')
@@ -320,7 +333,7 @@ export default {
       } catch (e) {
         console.error(e)
         await stopLoading()
-        uni.showToast({ title: e.message || '保存失败', icon: 'none' })
+        if (!this.pageDisposed) uni.showToast({ title: e.message || '保存失败', icon: 'none' })
       } finally {
         await stopLoading()
         this.saving = false
@@ -373,55 +386,42 @@ export default {
 }
 </script>
 
+<style>page { background: #FFFBEB; }</style>
 <style scoped>
-.page {
-  min-height: 100vh;
-  background: #f6f7fb;
-  padding: 24rpx;
-}
-.init-state {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
-  padding: 20rpx 0;
-  color: #888;
-  font-size: 26rpx;
-}
-.card {
-  background: #fff;
-  border-radius: 16rpx;
-  padding: 24rpx;
-}
-.label {
-  display: block;
-  font-size: 26rpx;
-  color: #666;
-  margin-bottom: 12rpx;
-}
-.avatar-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 24rpx;
-}
-.avatar {
-  width: 120rpx;
-  height: 120rpx;
-  border-radius: 60rpx;
-  background: #eee;
-}
-.mini {
-  margin-left: 18rpx;
-}
-.input {
-  height: 88rpx;
-  border: 1px solid #eee;
-  border-radius: 12rpx;
-  padding: 0 24rpx;
-  background: #fafafa;
-  margin-bottom: 24rpx;
-}
-.btn {
-  border-radius: 12rpx;
-}
+.profile-page { min-height: 100vh; box-sizing: border-box; background: #FFFBEB; padding: 30rpx 28rpx calc(28rpx + env(safe-area-inset-bottom)); color: #422919; }
+.profile-heading { padding: 4rpx 8rpx 30rpx; }
+.heading-row { display: flex; align-items: center; gap: 18rpx; }
+.heading-title { font-size: 50rpx; font-weight: 800; line-height: 1.3; }
+.chef-badge { width: 108rpx; height: 112rpx; flex-shrink: 0; }
+.heading-subtitle { display: block; color: #948776; font-size: 27rpx; line-height: 1.5; margin-top: -2rpx; }
+.init-state { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin-bottom: 20rpx; padding: 20rpx; border-radius: 18rpx; color: #846530; background: #FFF1C5; font-size: 25rpx; line-height: 1.5; }
+.retry-button { flex-shrink: 0; margin: 0; background: #FFFEF9; color: #805710; }
+.profile-card { padding: 28rpx; border-radius: 32rpx; background: #FFFEF9; box-shadow: 0 10rpx 30rpx rgba(163,122,37,.06); }
+.field-label { display: block; font-size: 29rpx; line-height: 1.5; margin-bottom: 14rpx; }
+.avatar-row { display: flex; align-items: center; gap: 24rpx; flex-wrap: wrap; }
+.avatar { width: 144rpx; height: 144rpx; flex-shrink: 0; border-radius: 50%; background: #EEECE6; border: 1rpx solid #F2EBDC; box-sizing: border-box; }
+.avatar-actions { display: flex; flex: 1 1 410rpx; min-width: 0; gap: 16rpx; }
+.avatar-button { display: flex; align-items: center; justify-content: center; gap: 10rpx; flex: 1; min-width: 0; box-sizing: border-box; margin: 0; padding: 12rpx 8rpx; min-height: 72rpx; line-height: 1.4; border-radius: 16rpx; font-size: 25rpx; font-weight: 600; white-space: nowrap; }
+.change-button { color: #79520A; background: #FFF1C2; }
+.clear-button { color: #8B8377; border: 1rpx solid #E8DCC0; background: #FBF8EE; }
+button::after { border: 0; }
+button[disabled] { opacity: .55; }
+.picture-icon { font-size: 32rpx; line-height: 1; }
+.trash-icon { position: relative; width: 22rpx; height: 26rpx; box-sizing: border-box; border: 3rpx solid currentColor; border-top: 0; border-radius: 0 0 3rpx 3rpx; margin: 6rpx 3rpx 0; flex-shrink: 0; }
+.trash-icon::before { content: ''; position: absolute; top: -5rpx; left: -5rpx; width: 26rpx; border-top: 3rpx solid currentColor; }
+.trash-icon::after { content: ''; position: absolute; width: 8rpx; height: 4rpx; border: 3rpx solid currentColor; border-bottom: 0; left: 4rpx; top: -10rpx; }
+.trash-icon view { width: 5rpx; height: 14rpx; margin: 5rpx auto 0; border-left: 2rpx solid currentColor; border-right: 2rpx solid currentColor; }
+.avatar-hint { display: block; color: #A18140; font-size: 23rpx; line-height: 1.5; margin-top: 16rpx; }
+.nickname-section { border-top: 1rpx solid #EEE3CC; margin-top: 30rpx; padding-top: 24rpx; }
+.nickname-input { width: 100%; box-sizing: border-box; height: 88rpx; padding: 0 24rpx; border-radius: 20rpx; background: #FCF5DC; font-size: 30rpx; color: #422919; }
+.nickname-placeholder { color: #A4957D; }
+.save-button { width: 100%; box-sizing: border-box; height: 90rpx; display: flex; align-items: center; justify-content: center; margin: 28rpx 0 0; border-radius: 20rpx; padding: 12rpx; line-height: 1.4; color: #4C3007; font-size: 34rpx; font-weight: 800; background: linear-gradient(110deg,#FFD451,#FFE589,#FFD14B); }
+.paw-decoration { position: relative; height: 320rpx; margin-top: 90rpx; pointer-events: none; overflow: hidden; }
+.paw { position: absolute; width: 70rpx; height: 74rpx; color: #FFE496; opacity: .48; transform: rotate(-18deg); }
+.paw-one { right: 46rpx; top: 65rpx; }
+.paw-two { right: 188rpx; top: 156rpx; transform: rotate(12deg) scale(.8); }
+.toe { position: absolute; width: 16rpx; height: 23rpx; border-radius: 50%; background: currentColor; }
+.toe-a { left: 0; top: 22rpx; transform: rotate(-24deg); }.toe-b { left: 17rpx; top: 3rpx; }.toe-c { right: 17rpx; top: 3rpx; }.toe-d { right: 0; top: 22rpx; transform: rotate(24deg); }
+.paw-pad { position: absolute; width: 43rpx; height: 35rpx; left: 14rpx; bottom: 1rpx; border-radius: 55% 55% 45% 45%; background: currentColor; }
+@media screen and (max-width: 350px) { .avatar-actions { flex-basis: 100%; } .avatar-row { gap: 18rpx; } .paw-decoration { margin-top: 40rpx; height: 220rpx; } }
 </style>

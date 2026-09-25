@@ -1,0 +1,37 @@
+/* 实色底板覆盖胶囊背后及底部安全区，避免滚动内容从空隙露出。 */
+.tab-shell {
+  position: fixed;
+  z-index: 1000;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8rpx 14rpx 12rpx;
+  padding-bottom: calc(12rpx + env(safe-area-inset-bottom));
+  background: #fffbeb;
+}
+.tab-shell::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -16rpx;
+  height: 16rpx;
+  background: linear-gradient(to bottom, rgba(255,251,235,0), #fffbeb);
+  pointer-events: none;
+}
+.tab-bar { display: flex; align-items: center; justify-content: space-around; height: 112rpx; padding: 8rpx 22rpx; box-sizing: border-box; border-radius: 48rpx; background: #fffefa; box-shadow: 0 2rpx 24rpx rgba(140,104,33,.08); }
+.tab-button { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 144rpx; height: 96rpx; padding: 6rpx 0; box-sizing: border-box; margin: 0; border-radius: 36rpx; color: #777983; background: transparent; line-height: 1.2; }
+.tab-button::after { border: 0; }
+.is-selected { color: #c58a00; background: #fff0bb; }
+.tab-pressed { opacity: .7; }
+.tab-label { font-size: 26rpx; margin-top: 7rpx; font-weight: 600; }
+.tab-icon { width: 42rpx; height: 42rpx; box-sizing: border-box; position: relative; }
+.icon-category { display: flex; flex-wrap: wrap; justify-content: space-between; align-content: space-between; }
+.square { width: 18rpx; height: 18rpx; box-sizing: border-box; border: 2.5rpx solid currentColor; border-radius: 5rpx; }
+.profile-head { position: absolute; left: 11rpx; top: 0; width: 21rpx; height: 21rpx; box-sizing: border-box; border: 2.5rpx solid currentColor; border-radius: 50%; }
+.profile-body { position: absolute; left: 3rpx; bottom: 0; width: 37rpx; height: 22rpx; box-sizing: border-box; border: 2.5rpx solid currentColor; border-radius: 22rpx 22rpx 5rpx 5rpx; }
+.is-selected .profile-head, .is-selected .profile-body { background: currentColor; }
+.house-roof { position: absolute; width: 29rpx; height: 29rpx; left: 6rpx; top: 3rpx; background: currentColor; border-radius: 4rpx; transform: rotate(45deg); }
+.house-body { position: absolute; left: 5rpx; bottom: 0; width: 32rpx; height: 29rpx; background: currentColor; border-radius: 3rpx; }
+.house-door { position: absolute; width: 10rpx; height: 17rpx; bottom: 0; left: 16rpx; background: #fffefa; border-radius: 3rpx 3rpx 0 0; }
+.is-selected .house-door { background: #fff0bb; }

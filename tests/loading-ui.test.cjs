@@ -75,7 +75,7 @@ test('cancel avatar picker never hides an unopened loading', async () => {
 test('avatar upload closes before success toast, once', async () => {
   const h = setup(), page = h.page('pages/profile/edit.vue')
   await page.chooseAvatar()
-  assert.deepEqual(h.events, ['show', 'hide', 'hidden', 'toast:头像已上传'])
+  assert.deepEqual(h.events, ['show', 'hide', 'hidden', 'toast:头像已上传，请保存'])
 })
 test('avatar upload failure closes before error toast', async () => {
   const h = setup(), page = h.page('pages/profile/edit.vue')

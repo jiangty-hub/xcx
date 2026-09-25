@@ -1,92 +1,94 @@
 <template>
-  <view class="page">
+  <view class="editor-page">
     <view class="header">
-      <text class="title">{{ mode === 'edit' ? '修改菜品' : '新增菜品' }}</text>
+      <view class="heading-row"><text class="title">{{ mode === 'edit' ? '修改菜品' : '新增菜品' }}</text><image v-if="!badgeFailed" class="chef-badge" src="/static/detail/chef-badge.png" mode="aspectFit" @error="badgeFailed = true" /></view><text class="subtitle">{{ mode === 'edit' ? '更新这道家的味道' : '记录一道家的味道' }}</text>
     </view>
 
     <view class="content">
-      <view v-if="pendingCreate" class="card">
+      <view v-if="createInitializing" class="notice">正在加载表单，请稍候…</view>
+      <view v-else-if="initError" class="notice"><text>{{ initError }}</text><button class="retry" size="mini" @click="initializeEditor">重新加载</button></view>
+      <view v-else-if="!canManage" class="notice">仅管理员可新增或修改菜品，请登录管理员账号后重新进入。</view>
+      <view v-if="categoryError || (!createInitializing && !cateList.length)" class="notice"><text>{{ categoryError || '暂无可用分类，请配置分类后重试' }}</text><button class="retry" size="mini" :disabled="formLocked || categoryLoading" @click="retryCategories">重试分类</button></view>
+      <view v-if="pendingCreate" class="notice">
         <text>发布结果待确认，请点击底部“重试确认”。确认完成前暂不能修改内容，离开后可再次进入继续确认。</text>
       </view>
-      <view v-if="pendingEdit" class="card">
+      <view v-if="pendingEdit" class="notice">
         <text>修改结果待确认，请点击底部“重试确认”。确认前暂不能修改内容，离开后可重新进入此菜品编辑页继续确认。</text>
       </view>
       <!-- 基础信息 -->
-      <view class="card">
+      <view class="card"><view class="section-title"><text class="section-icon">▤</text><text>基本信息</text></view>
         <view class="row">
           <text class="label">菜名</text>
-          <input :disabled="formLocked" class="input" v-model="form.name" placeholder="例如：麻婆豆腐" />
+          <input :disabled="fieldsDisabled" class="input" v-model="form.name" :maxlength="Math.max(50, String(form.name || '').length)" placeholder="例如：麻婆豆腐" />
         </view>
 
         <view class="row">
           <text class="label">价格</text>
-          <input :disabled="formLocked" class="input" type="number" v-model="form.price" placeholder="例如：880" />
+          <input :disabled="fieldsDisabled" class="input" type="digit" v-model="form.price" placeholder="例如：880" />
         </view>
 
         <view class="row">
           <text class="label">菜品分类</text>
-          <picker :disabled="formLocked" class="picker" :range="cateList" range-key="name" :value="cateIndex" @change="onCateChange">
+          <picker :disabled="fieldsDisabled || categoryLoading || !cateList.length" class="picker" :range="cateList" range-key="name" :value="cateIndex" @change="onCateChange">
             <view class="picker-view">
-              <text v-if="cateIndex !== -1">{{ cateList[cateIndex].name }}</text>
-              <text v-else class="placeholder">请选择分类</text>
+              <text v-if="cateList[cateIndex]">{{ cateList[cateIndex].name }}</text>
+              <text v-else class="placeholder">{{ form.categoryName ? form.categoryName + '（请重新选择）' : '请选择分类' }}</text><text class="picker-arrow">⌄</text>
             </view>
           </picker>
         </view>
 
         <view class="row">
           <text class="label">口味</text>
-          <input :disabled="formLocked" class="input" v-model="form.flavor" placeholder="例如：咸香微辣/酸甜可口" />
+          <input :disabled="fieldsDisabled" class="input" v-model="form.flavor" :maxlength="Math.max(50, String(form.flavor || '').length)" placeholder="例如：咸香微辣/酸甜可口" />
         </view>
 
         <view class="row">
           <text class="label">难度</text>
-          <input :disabled="formLocked" class="input" v-model="form.difficulty" placeholder="例如：简单/中等/困难" />
+          <input :disabled="fieldsDisabled" class="input" v-model="form.difficulty" :maxlength="Math.max(50, String(form.difficulty || '').length)" placeholder="例如：简单/中等/困难" />
         </view>
 
         <view class="row">
           <text class="label">时长(分)</text>
-          <input :disabled="formLocked" class="input" type="number" v-model="form.cook_time" placeholder="例如：10" />
+          <input :disabled="fieldsDisabled" class="input" type="number" v-model="form.cook_time" placeholder="例如：10" />
         </view>
 
         <view class="row col">
           <text class="label">菜品简介</text>
-          <textarea :disabled="formLocked" class="textarea" v-model="form.summary" placeholder="一句话介绍菜品" />
+          <textarea :disabled="fieldsDisabled" class="textarea" v-model="form.summary" :maxlength="Math.max(300, String(form.summary || '').length)" placeholder="一句话介绍菜品" />
         </view>
       </view>
 
       <!-- 封面图（✅ 存 fileID，展示用临时 URL） -->
       <view class="card">
-        <view class="section-title">菜品图片（{{ form.cover_images.length }}/{{ maxCoverImages }}）</view>
+        <view class="section-title"><text class="section-icon">▧</text><text>菜品图片（{{ form.cover_images.length }}/{{ maxCoverImages }}）</text></view>
 
         <view class="img-list" v-if="form.cover_images.length">
           <view class="img-item" v-for="(fid, idx) in form.cover_images" :key="idx">
-            <image class="img" :src="coverSrc(fid)" mode="aspectFill" />
+            <image class="img" :src="failedCovers[fid] ? '/static/cover-default.png' : coverSrc(fid)" @error="onCoverError(fid)" mode="aspectFill" />
             <view class="img-actions">
-              <view class="mini-btn mini-danger" @click="removeCover(idx)">删除</view>
+              <button class="mini-btn mini-danger" @click="removeCover(idx)" :disabled="fieldsDisabled">删除</button>
             </view>
           </view>
         </view>
 
         <view class="row">
-          <view
-            class="btn small btn-add"
-            :class="{ disabled: formLocked || !canManage || form.cover_images.length >= maxCoverImages }"
+          <button class="btn small btn-add upload-choice"
+            :disabled="fieldsDisabled || form.cover_images.length >= maxCoverImages"
             @click="chooseAndUploadCover('album')"
           >
-            {{ uploading ? '上传中...' : (form.cover_images.length >= maxCoverImages ? '已达图片上限' : '从相册选择') }}
-          </view>
-          <view
-            class="btn small btn-add"
-            :class="{ disabled: formLocked || !canManage || form.cover_images.length >= maxCoverImages }"
+            <text class="upload-icon">▧</text><text>{{ (uploading || choosingCover) ? '处理中...' : (form.cover_images.length >= maxCoverImages ? '已达图片上限' : '从相册选择') }}</text>
+          </button>
+          <button class="btn small btn-add upload-choice"
+            :disabled="fieldsDisabled || form.cover_images.length >= maxCoverImages"
             @click="chooseAndUploadCover('camera')"
           >
-            {{ uploading ? '上传中...' : (form.cover_images.length >= maxCoverImages ? '已达图片上限' : '拍照上传') }}
-          </view>
+            <view class="camera-icon" /><text>{{ (uploading || choosingCover) ? '处理中...' : (form.cover_images.length >= maxCoverImages ? '已达图片上限' : '拍照上传') }}</text>
+          </button>
         </view>
 
         <view class="row" v-if="uploading">
           <text class="label">上传进度</text>
-          <text class="placeholder">{{ uploadProgress }}%</text>
+          <text class="placeholder">上传中，请稍候…</text>
         </view>
 
         <view class="row" v-if="!canManage">
@@ -96,66 +98,65 @@
 
       <!-- tags -->
       <view class="card">
-        <view class="section-title">标签</view>
+        <view class="section-title"><text class="section-icon">◇</text><text>标签</text></view>
 
         <view class="row split">
-          <input :disabled="formLocked" class="input grow" v-model="tagInput" placeholder="例如：下饭/好吃" />
-          <view class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addTag">添加</view>
+          <input :disabled="fieldsDisabled" class="input grow" v-model="tagInput" :maxlength="30" placeholder="例如：下饭/好吃" />
+          <button class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addTag" :disabled="fieldsDisabled">添加</button>
         </view>
 
         <view class="chips" v-if="form.tags.length">
           <view class="chip" v-for="(t, i) in form.tags" :key="i">
             <text class="chip-text">{{ t }}</text>
-            <view class="chip-x" @click="removeTag(i)">×</view>
+            <button class="chip-x" @click="removeTag(i)" :disabled="fieldsDisabled">×</button>
           </view>
         </view>
       </view>
 
       <!-- ingredients -->
       <view class="card">
-        <view class="section-title">食材清单</view>
+        <view class="section-title"><text class="section-icon">♧</text><text>食材清单</text></view>
 
         <view class="row split">
-          <input :disabled="formLocked" class="input grow" v-model="ingInput" placeholder="例如：肥牛/猪肉" />
-          <view class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addIngredient">添加</view>
+          <input :disabled="fieldsDisabled" class="input grow" v-model="ingInput" :maxlength="80" placeholder="例如：肥牛/猪肉" />
+          <button class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addIngredient" :disabled="fieldsDisabled">添加</button>
         </view>
 
         <view class="list" v-if="form.ingredients.length">
           <view class="list-item" v-for="(it, i) in form.ingredients" :key="i">
             <text class="li-text">{{ i + 1 }}. {{ it }}</text>
-            <view class="mini-btn mini-danger" @click="removeIngredient(i)">删除</view>
+            <button class="mini-btn mini-danger" @click="removeIngredient(i)" :disabled="fieldsDisabled">删除</button>
           </view>
         </view>
       </view>
 
       <!-- steps -->
       <view class="card">
-        <view class="section-title">制作步骤</view>
+        <view class="section-title"><text class="section-icon">☷</text><text>制作步骤</text></view>
 
         <view class="row split">
-          <input :disabled="formLocked" class="input grow" v-model="stepInput" placeholder="例如：猪肉焯水..." />
-          <view class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addStep">添加</view>
+          <textarea :disabled="fieldsDisabled" class="input grow" v-model="stepInput" placeholder="例如：猪肉焯水..."  :maxlength="300" auto-height :show-confirm-bar="true" />
+          <button class="btn small btn-add shrink" :class="{ disabled: formLocked || !canManage }" @click="addStep" :disabled="fieldsDisabled">添加</button>
         </view>
 
         <view class="list" v-if="form.steps.length">
           <view class="list-item" v-for="(it, i) in form.steps" :key="i">
-            <text class="li-text">{{ i + 1 }}. {{ it }}</text>
-            <view class="mini-btn mini-danger" @click="removeStep(i)">删除</view>
+            <text class="step-number">{{ i + 1 }}</text><text class="li-text">{{ it }}</text>
+            <button class="mini-btn mini-danger" @click="removeStep(i)" :disabled="fieldsDisabled">删除</button>
           </view>
         </view>
       </view>
     </view>
 
     <!-- ✅ 底部按钮：固定 -->
-    <view class="bottom">
-      <view class="btn ghost" @click="onCancel">取消</view>
-      <view class="btn primary" :class="{ disabled: submitting || uploading || createInitializing || leaveGuardLeaving || !canManage }" @click="onSubmit">
+    <view v-show="!keyboardVisible" class="bottom">
+      <button class="btn ghost" @click="onCancel" :disabled="cancelDisabled">取消</button>
+      <button class="btn primary" :class="{ disabled: submitting || uploading || createInitializing || leaveGuardLeaving || !canManage }" @click="onSubmit" :disabled="submitDisabled">
         {{ submitting ? '提交中...' : ((pendingEdit || pendingCreate) ? '重试确认' : (mode === 'edit' ? '保存修改' : '发布菜品')) }}
-      </view>
+      </button>
     </view>
   </view>
 </template>
-
 <script>
 import { beginLoading } from '@/utils/loading.js'
 import leaveGuard from '@/utils/leave-guard.js'
@@ -180,8 +181,11 @@ export default {
   mixins: [leaveGuard],
 
   computed: {
+    fieldsDisabled() { return this.formLocked || !this.canManage || !!this.initError },
+    submitDisabled() { return this.createInitializing || !!this.initError || this.submitting || this.uploading || this.choosingCover || this.leaveGuardLeaving || !this.canManage },
+    cancelDisabled() { return this.submitting || this.uploading || this.choosingCover || this.leaveGuardLeaving || this.backLock },
     formLocked() {
-      return this.createInitializing || this.submitting || this.uploading ||
+      return this.createInitializing || !!this.initError || this.submitting || this.uploading || this.choosingCover ||
         this.leaveGuardLeaving || !!this.pendingCreate || !!this.pendingEdit
     },
     leaveGuardMessage() {
@@ -198,6 +202,9 @@ export default {
   data() {
     return {
       mode: 'add',
+      initError: '', initializingTask: false, categoryError: '', categoryLoading: false, choosingCover: false,
+      keyboardVisible: false, keyboardActive: true, keyboardListener: null,
+      badgeFailed: false, failedCovers: {},
       createInitializing: true,
       createOwnerUid: '',
       createRequestId: '',
@@ -254,67 +261,19 @@ export default {
     this.mode = options.mode || 'add'
     this.foodId = options.id || ''
 
-    await this.loadCategories()
-
-    // ✅ 先判断权限（没权限也可以看页面，但不能提交/上传）
-    await this.refreshPermission()
-    if (this.canManage) {
-      this.createOwnerUid = uni.getStorageSync('uni_id_uid') || ''
-      if (this.mode === 'edit') {
-        try {
-          this.pendingEdit = getFoodEditRequest(this.createOwnerUid, this.foodId)
-          if (this.pendingEdit) {
-            this.form = { ...this.form, ...JSON.parse(JSON.stringify(this.pendingEdit.payload)) }
-            this.foodVersion = this.pendingEdit.expectedVersion
-          }
-        } catch (error) {
-          uni.showToast({ title: error.message || '读取待确认修改失败', icon: 'none' })
-          return
-        }
-      }
-      if (this.mode !== 'edit') {
-        try {
-          this.pendingCreate = getFoodCreateRequest(this.createOwnerUid)
-          if (this.pendingCreate) {
-            this.createRequestId = this.pendingCreate.requestId
-            this.form = { ...this.form, ...this.pendingCreate.payload }
-          }
-        } catch (error) {
-          uni.showToast({ title: error.message || '读取待确认发布失败', icon: 'none' })
-          return
-        }
-      }
-      this.newlyUploadedCoverIds = [...new Set([...getPendingCleanup('food'), ...(this.pendingCreate?.uploadedCoverIds || []), ...(this.pendingEdit?.uploadedCoverIds || [])])]
-      await this.cleanupPendingCovers()
-    }
-
-    if (this.mode === 'edit') {
-      if (!this.foodId) {
-        uni.showToast({ title: '缺少菜品id', icon: 'none' })
-        uni.navigateBack()
-        return
-      }
-      const loaded = this.pendingEdit ? true : await this.loadForEdit()
-      if (!loaded) return
-      this.syncCateIndexByForm()
-      await this.hydrateCoverUrls()
-    } else if (this.pendingCreate) {
-      this.syncCateIndexByForm()
-      await this.hydrateCoverUrls()
-    } else {
-      if (this.cateList.length) {
-        this.cateIndex = 0
-        this.form.categoryId = this.cateList[0].cate_id
-        this.form.categoryName = this.cateList[0].name
-      }
-    }
-
-    this.snapshot = JSON.stringify(this.normalizeForm(this.form))
-    this.createInitializing = false
+    await this.initializeEditor()
   },
+  onReady() {
+    this.keyboardListener = event => { if (this.keyboardActive) this.keyboardVisible = Number(event.height) > 0 }
+    if (typeof uni.onKeyboardHeightChange === 'function') uni.onKeyboardHeightChange(this.keyboardListener)
+  },
+  onShow() { this.keyboardActive = true },
+  onHide() { this.keyboardActive = false; this.keyboardVisible = false },
 
   // 页面离开兜底：提交/上传进行中时只保留待清理记录，避免与写库请求并发删除图片。
   onUnload() {
+    if (this.keyboardListener && typeof uni.offKeyboardHeightChange === 'function') uni.offKeyboardHeightChange(this.keyboardListener)
+    this.keyboardActive = false
     this.safeHideLoading(true)
     this.stopFakeProgress()
     if (!this.submitting && !this.uploading) {
@@ -324,11 +283,11 @@ export default {
 
   onBackPress() {
     if (this.leaveGuardLeaving) return false
-    if (this.submitting || this.uploading) {
+    if (this.submitting || this.uploading || this.choosingCover) {
       return true
     }
     if (this.backLock) return true
-    if (this.isDirty()) {
+    if (this.needsLeaveConfirmation()) {
       this.backLock = true
       uni.showModal({
         title: '提示',
@@ -350,6 +309,83 @@ export default {
   },
 
   methods: {
+    async initializeEditor() {
+      if (this.initializingTask) return
+      this.initializingTask = true
+      this.createInitializing = true
+      this.initError = ''
+      try {
+        await this.loadCategories()
+
+        // ✅ 先判断权限（没权限也可以看页面，但不能提交/上传）
+        await this.refreshPermission()
+        if (this.canManage) {
+          this.createOwnerUid = uni.getStorageSync('uni_id_uid') || ''
+          if (this.mode === 'edit') {
+            try {
+              this.pendingEdit = getFoodEditRequest(this.createOwnerUid, this.foodId)
+              if (this.pendingEdit) {
+                this.form = { ...this.form, ...JSON.parse(JSON.stringify(this.pendingEdit.payload)) }
+                this.foodVersion = this.pendingEdit.expectedVersion
+              }
+            } catch (error) {
+              this.initError = error.message || '读取待确认修改失败'
+              return
+            }
+          }
+          if (this.mode !== 'edit') {
+            try {
+              this.pendingCreate = getFoodCreateRequest(this.createOwnerUid)
+              if (this.pendingCreate) {
+                this.createRequestId = this.pendingCreate.requestId
+                this.form = { ...this.form, ...this.pendingCreate.payload }
+              }
+            } catch (error) {
+              this.initError = error.message || '读取待确认发布失败'
+              return
+            }
+          }
+          this.newlyUploadedCoverIds = [...new Set([...getPendingCleanup('food'), ...(this.pendingCreate?.uploadedCoverIds || []), ...(this.pendingEdit?.uploadedCoverIds || [])])]
+          await this.cleanupPendingCovers()
+        }
+
+        if (this.mode === 'edit') {
+          if (!this.foodId) {
+            this.initError = '缺少菜品id，请返回后重新进入'
+            return
+          }
+          const loaded = this.pendingEdit ? true : await this.loadForEdit()
+          if (!loaded) return
+          this.syncCateIndexByForm()
+          await this.hydrateCoverUrls()
+        } else if (this.pendingCreate) {
+          this.syncCateIndexByForm()
+          await this.hydrateCoverUrls()
+        } else {
+          if (this.cateList.length) {
+            this.cateIndex = 0
+            this.form.categoryId = this.cateList[0].cate_id
+            this.form.categoryName = this.cateList[0].name
+          }
+        }
+
+        this.snapshot = JSON.stringify(this.normalizeForm(this.form))
+        this.createInitializing = false
+      } catch (error) {
+        this.initError = error.message || '表单加载失败，请重试'
+      } finally {
+        this.createInitializing = false
+        this.initializingTask = false
+      }
+    },
+    async retryCategories() {
+      if (this.formLocked || this.categoryLoading) return
+      await this.loadCategories()
+      this.syncCateIndexByForm()
+    },
+    hasInputDraft() { return [this.tagInput, this.ingInput, this.stepInput].some(value => String(value || '').trim()) },
+    needsLeaveConfirmation() { return !!this.pendingCreate || !!this.pendingEdit || this.hasInputDraft() || !!(this.snapshot && this.isDirty()) },
+    onCoverError(fid) { if (!this.failedCovers[fid]) this.failedCovers = { ...this.failedCovers, [fid]: true } },
     // ✅ 统一取 token：兼容不同项目里存 token 的 key
     getToken() {
       return getAuthToken()
@@ -382,13 +418,15 @@ export default {
     },
 
     async loadCategories() {
+      this.categoryLoading = true
+      this.categoryError = ''
       try {
         const list = await foodService.getCategories()
-        this.cateList = list || []
+        this.cateList = Array.isArray(list) ? list : []
       } catch (e) {
-        uni.showToast({ title: e?.message || '分类加载失败', icon: 'none' })
+        this.categoryError = e?.message || '分类加载失败'
         this.cateList = []
-      }
+      } finally { this.categoryLoading = false }
     },
 
     async loadForEdit() {
@@ -416,8 +454,7 @@ export default {
         return true
       } catch (e) {
         await this.safeHideLoading(true)
-        uni.showToast({ title: e?.message || '加载失败', icon: 'none' })
-        setTimeout(() => this.leavePageWithoutAlert(), 150)
+        this.initError = e?.message || '菜品加载失败，请重试'
         return false
       } finally {
         await this.safeHideLoading()
@@ -493,6 +530,7 @@ export default {
         return
       }
 
+      this.choosingCover = true
       let uploadFinished = false
 
       try {
@@ -593,10 +631,11 @@ export default {
         this.finishProgressAndHide()
         uploadFinished = true
       } catch (e) {
-        uni.showToast({ title: e?.message || '选择/上传失败', icon: 'none' })
+        if (!/cancel/i.test(e?.errMsg || e?.message || '')) uni.showToast({ title: e?.message || '选择/上传失败', icon: 'none' })
       } finally {
         this.stopFakeProgress()
         this.hasRealTotal = false
+        this.choosingCover = false
         if (!uploadFinished) {
           this.uploading = false
           this.uploadProgress = 0
@@ -668,6 +707,7 @@ export default {
       }
       const t = (this.tagInput || '').trim()
       if (!t) return
+      if (t.length > 30) { uni.showToast({ title: '标签最长30字符', icon: 'none' }); return }
       if (!this.form.tags.includes(t)) {
         this.form.tags.push(t)
         uni.hideKeyboard()
@@ -691,6 +731,7 @@ export default {
       }
       const t = (this.ingInput || '').trim()
       if (!t) return
+      if (t.length > 80) { uni.showToast({ title: '食材最长80字符', icon: 'none' }); return }
       this.form.ingredients.push(t)
       this.ingInput = ''
       uni.hideKeyboard()
@@ -712,6 +753,7 @@ export default {
       }
       const t = (this.stepInput || '').trim()
       if (!t) return
+      if (t.length > 300) { uni.showToast({ title: '步骤最长300字符', icon: 'none' }); return }
       this.form.steps.push(t)
       this.stepInput = ''
       uni.hideKeyboard()
@@ -728,12 +770,21 @@ export default {
     validate() {
       if (!(this.form.name || '').trim()) return '请填写菜名'
       if (!String(this.form.categoryId ?? '').length) return '请选择分类'
+      if (this.categoryError || !this.cateList.length) return '请先加载可用分类'
+      if (!this.cateList.some(c => String(c.cate_id) === String(this.form.categoryId))) return '原分类已不可用，请重新选择'
+      if (this.hasInputDraft()) return '请先添加或清空下方输入内容'
+      for (const [key, label, max] of [['name', '菜名', 50], ['flavor', '口味', 50], ['difficulty', '难度', 50], ['summary', '简介', 300]]) {
+        if (String(this.form[key] || '').trim().length > max) return label + '最长' + max + '字符'
+      }
+      for (const [key, label, max] of [['tags', '标签', 30], ['ingredients', '食材', 80], ['steps', '步骤', 300]]) {
+        if (this.form[key].some(item => String(item || '').trim().length > max)) return label + '单项最长' + max + '字符'
+      }
 
       const price = Number(this.form.price)
-      if (Number.isNaN(price) || price < 0) return '价格不合法'
+      if (!Number.isFinite(price) || price < 0) return '价格不合法'
 
       const cook = Number(this.form.cook_time)
-      if (Number.isNaN(cook) || cook < 0) return '时长不合法'
+      if (!Number.isFinite(cook) || cook < 0) return '时长不合法'
 
       return ''
     },
@@ -816,7 +867,7 @@ export default {
     },
 
     async onSubmit() {
-      if (this.createInitializing || this.leaveGuardLeaving || this.submitting || this.uploading) return
+      if (this.createInitializing || this.initError || this.leaveGuardLeaving || this.submitting || this.uploading || this.choosingCover) return
 
       const auth = this.ensureManageOrToast()
       if (!auth.ok) return
@@ -923,15 +974,15 @@ export default {
     },
 
     onCancel() {
-      if (this.submitting || this.uploading) {
+      if (this.submitting || this.uploading || this.choosingCover) {
         return
       }
       if (this.backLock) return
-      if (this.isDirty()) {
+      if (this.needsLeaveConfirmation()) {
         this.backLock = true
         uni.showModal({
           title: '提示',
-          content: this.pendingEdit ? '修改结果尚未确认，离开后可重新进入此菜品编辑页继续确认。' : '内容尚未保存，确定要离开吗？',
+          content: this.pendingEdit ? '修改结果尚未确认，离开后可重新进入此菜品编辑页继续确认。' : (this.pendingCreate ? '发布结果尚未确认，离开后可再次进入新增页继续确认。' : '内容尚未保存，确定要离开吗？'),
           success: async (res) => {
             if (res.confirm) {
               await this.leaveWithCleanup()
@@ -952,265 +1003,63 @@ export default {
 }
 </script>
 
-<style lang="scss">
-page {
-  background: #f5f5f5;
-  height: 100%;
-}
-
-.page {
-  min-height: 100vh;
-}
-
-.header {
-  padding: 24rpx 24rpx 8rpx;
-}
-.title {
-  font-size: 36rpx;
-  font-weight: 700;
-  color: #333;
-}
-
-/* 内容：为底部固定按钮留空间 */
-.content {
-  padding: 0 20rpx;
-  overflow: hidden;
-  padding-bottom: calc(140rpx + env(safe-area-inset-bottom) + 16rpx);
-}
-
-.card {
-  background: #fff;
-  border-radius: 20rpx;
-  padding: 24rpx;
-  margin: 16rpx 0;
-  box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.06);
-}
-
-.section-title {
-  font-size: 30rpx;
-  font-weight: 700;
-  margin-bottom: 16rpx;
-  color: #333;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 16rpx;
-  margin-bottom: 18rpx;
-}
-.row.col {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10rpx;
-}
-.label {
-  width: 160rpx;
-  color: #666;
-  font-size: 28rpx;
-}
-.row.col .label {
-  width: auto;
-}
-
-.input,
-.picker-view {
-  flex: 1;
-  background: #f7f7f7;
-  border-radius: 14rpx;
-  padding: 18rpx 16rpx;
-  font-size: 28rpx;
-}
-.picker {
-  flex: 1;
-}
-.placeholder {
-  color: #999;
-}
-
-.textarea {
-  background: #f7f7f7;
-  border-radius: 14rpx;
-  padding: 18rpx 16rpx;
-  font-size: 28rpx;
-  min-height: 140rpx;
-}
-
-/* ===== 图片区 ===== */
-.img-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16rpx;
-  margin-bottom: 16rpx;
-}
-.img-item {
-  width: 210rpx;
-}
-.img {
-  width: 210rpx;
-  height: 140rpx;
-  border-radius: 14rpx;
-  background: #eee;
-}
-.img-actions {
-  margin-top: 10rpx;
-  display: flex;
-  justify-content: center;
-}
-
-/* ===== 标签 chip 更产品化 ===== */
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
-  margin-top: 8rpx;
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 10rpx;
-  padding: 10rpx 14rpx;
-  border-radius: 999rpx;
-  background: #fff7ed;
-  border: 1rpx solid #fed7aa;
-}
-.chip-text {
-  font-size: 24rpx;
-  color: #f97316;
-  font-weight: 700;
-}
-.chip-x {
-  width: 34rpx;
-  height: 34rpx;
-  border-radius: 999rpx;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #ffedd5;
-  color: #f97316;
-  font-size: 26rpx;
-  font-weight: 900;
-}
-
-/* ===== 列表更“产品化” ===== */
-.list {
-  margin-top: 8rpx;
-}
-.list-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16rpx 0;
-  border-bottom: 1rpx solid #f0f0f0;
-}
-.li-text {
-  color: #333;
-  font-size: 28rpx;
-  flex: 1;
-  padding-right: 16rpx;
-}
-
-/* ===== 小按钮体系：添加/删除（有层次感） ===== */
-.btn.small {
-  height: 72rpx;
-  border-radius: 18rpx;
-  font-size: 28rpx;
-  font-weight: 700;
-}
-
-.btn-add {
-  background: #ff6b35;
-  color: #fff;
-  box-shadow: 0 6rpx 16rpx rgba(0, 0, 0, 0.12);
-  border: 1rpx solid rgba(0, 0, 0, 0.06);
-}
-
-.mini-btn {
-  height: 56rpx;
-  padding: 0 18rpx;
-  border-radius: 14rpx;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24rpx;
-  font-weight: 700;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.mini-danger {
-  color: #ff4d4f;
-  background: #fff1f0;
-  border: 1rpx solid #ffccc7;
-}
-
-.mini-btn:active,
-.btn-add:active {
-  transform: scale(0.98);
-  opacity: 0.92;
-}
-
-/* ===== 底部按钮：固定 + 安全区白底填充 ===== */
-.bottom {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-
-  z-index: 9999;
-  background: #fff;
-  box-shadow: 0 -4rpx 20rpx rgba(0, 0, 0, 0.08);
-
-  display: flex;
-  gap: 16rpx;
-
-  padding: 14rpx 20rpx 18rpx;
-  padding-bottom: calc(18rpx + env(safe-area-inset-bottom));
-}
-
-.bottom::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-
-  height: constant(safe-area-inset-bottom);
-  height: env(safe-area-inset-bottom);
-  background: #fff;
-}
-
-.btn {
-  flex: 1;
-  height: 88rpx;
-  border-radius: 44rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 30rpx;
-  font-weight: 700;
-}
-.btn.ghost {
-  background: #f7f7f7;
-  color: #666;
-}
-.btn.primary {
-  background: #ff6b35;
-  color: #fff;
-}
-.btn.disabled {
-  opacity: 0.6;
-  pointer-events: none;
-}
-
-.row.split {
-  align-items: center;
-}
-.row.split .grow {
-  flex: 1;
-}
-.row.split .shrink {
-  flex: 0 0 160rpx;
-}
+<style>page { background: #FFFBEB; }</style>
+<style scoped>
+.editor-page { --action-height: 120rpx; min-height: 100vh; background: #FFFBEB; color: #40291C; }
+.header { padding: 32rpx 32rpx 12rpx; }
+.heading-row { display: flex; align-items: center; gap: 18rpx; }
+.title { font-size: 48rpx; font-weight: 800; }
+.chef-badge { width: 102rpx; height: 108rpx; }
+.subtitle { display: block; font-size: 25rpx; color: #968875; margin-top: -6rpx; }
+.content { padding: 0 24rpx calc(var(--action-height) + 24rpx + env(safe-area-inset-bottom)); }
+.card { margin: 20rpx 0; padding: 24rpx; border-radius: 28rpx; background: #FFFEF9; box-shadow: 0 8rpx 24rpx rgba(163,122,37,.05); }
+.section-title { display: flex; align-items: center; gap: 16rpx; font-size: 30rpx; font-weight: 800; margin-bottom: 22rpx; }
+.section-icon { width: 48rpx; height: 48rpx; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 50%; color: #966900; background: #FFEDAC; font-size: 32rpx; }
+.row { display: flex; align-items: center; gap: 14rpx; margin-bottom: 16rpx; }
+.row:last-child { margin-bottom: 0; }
+.label { flex: 0 0 146rpx; font-size: 26rpx; color: #684E3C; }
+.input, .picker-view, .textarea { min-width: 0; box-sizing: border-box; background: #FCF6DF; border-radius: 15rpx; padding: 16rpx; font-size: 26rpx; color: #382518; }
+.input { flex: 1; height: 72rpx; }
+.picker { flex: 1; min-width: 0; }
+.picker-view { min-height: 72rpx; display: flex; align-items: center; justify-content: space-between; gap: 12rpx; }
+.picker-view text { overflow-wrap: anywhere; }
+.picker-arrow { flex-shrink: 0; font-size: 30rpx; color: #918372; }
+.placeholder { color: #A49682; font-size: 24rpx; }
+.row.col { flex-direction: column; align-items: stretch; gap: 12rpx; }
+.row.col .label { flex: auto; }
+.textarea { width: 100%; height: 200rpx; line-height: 1.6; }
+.split .input { flex: 1; width: 0; }
+.split textarea.input { min-height: 72rpx; height: auto; line-height: 1.5; }
+.btn { margin: 0; min-width: 0; box-sizing: border-box; flex: 1; display: flex; align-items: center; justify-content: center; min-height: 88rpx; padding: 10rpx 16rpx; border-radius: 44rpx; line-height: 1.4; font-size: 29rpx; font-weight: 700; }
+button::after { border: 0; }
+.btn.small { min-height: 72rpx; border-radius: 16rpx; font-size: 26rpx; }
+.btn-add { color: #54380B; background: linear-gradient(110deg,#FFE083,#FFD14C); }
+.upload-choice { gap: 10rpx; }
+.upload-icon { font-size: 30rpx; }
+.camera-icon { width: 28rpx; height: 22rpx; border-radius: 4rpx; background: currentColor; position: relative; flex-shrink: 0; }
+.camera-icon::before { content: ''; position: absolute; width: 12rpx; height: 5rpx; left: 8rpx; top: -4rpx; background: currentColor; border-radius: 3rpx 3rpx 0 0; }
+.camera-icon::after { content: ''; position: absolute; width: 10rpx; height: 10rpx; border: 2rpx solid #FFF5D5; border-radius: 50%; left: 7rpx; top: 4rpx; }
+.step-number { min-width: 42rpx; height: 42rpx; padding: 0 4rpx; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #E9AF22; color: white; font-size: 24rpx; flex-shrink: 0; }
+.split .shrink { flex: 0 0 128rpx; }
+.img-list + .row .btn, .card > .row .btn-add:not(.shrink) { border: 1rpx solid #F0BE42; background: #FFF5D5; color: #79530A; }
+.img-list { display: flex; flex-wrap: wrap; gap: 12rpx; margin-bottom: 20rpx; }
+.img-item { width: calc((100% - 24rpx) / 3); min-width: 0; }
+.img { width: 100%; height: 140rpx; border-radius: 14rpx; background: #F4ECD8; }
+.img-actions { display: flex; justify-content: center; margin-top: 8rpx; }
+.mini-btn { margin: 0; flex-shrink: 0; padding: 8rpx 14rpx; line-height: 1.5; font-size: 23rpx; border-radius: 14rpx; }
+.mini-danger { color: #E46846; background: #FFF0E8; }
+.chips { display: flex; flex-wrap: wrap; gap: 12rpx; }
+.chip { display: flex; align-items: center; gap: 8rpx; max-width: 100%; box-sizing: border-box; padding: 8rpx 12rpx 8rpx 18rpx; border-radius: 36rpx; background: #FFF0BB; }
+.chip-text { min-width: 0; font-size: 25rpx; overflow-wrap: anywhere; }
+.chip-x { margin: 0; flex-shrink: 0; width: 44rpx; height: 44rpx; padding: 0; line-height: 44rpx; background: transparent; color: #AD7C1D; }
+.list-item { display: flex; align-items: flex-start; gap: 16rpx; padding: 16rpx 0; border-bottom: 1rpx solid #F0E7D3; }
+.list-item:last-child { border: 0; }
+.li-text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 26rpx; line-height: 1.65; }
+.notice { padding: 20rpx; margin: 18rpx 0; border-radius: 18rpx; background: #FFF0BE; color: #806126; font-size: 25rpx; line-height: 1.6; }
+.retry { margin: 12rpx 0 0; background: #FFFEF9; color: #805A17; }
+.bottom { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; box-sizing: border-box; height: calc(var(--action-height) + env(safe-area-inset-bottom)); padding: 14rpx 24rpx calc(18rpx + env(safe-area-inset-bottom)); display: flex; gap: 16rpx; background: #FFFEF9; box-shadow: 0 -4rpx 20rpx rgba(145,110,37,.05); }
+.btn.ghost { color: #8C857B; background: #F4F1EB; }
+.btn.primary { color: #4D3309; background: linear-gradient(110deg,#FFDF73,#FFD047); }
+button[disabled] { opacity: .5; }
+@media screen and (max-width: 350px) { .label { flex-basis: 126rpx; font-size: 25rpx; } .card { padding: 20rpx; } .split .shrink { flex-basis: 112rpx; } }
 </style>

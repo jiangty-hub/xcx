@@ -23,7 +23,7 @@ function setup({ selected, categories = [{ cate_id: 0, name: '牛肉类' }, { ca
     async getFoodsByCategory(id, options) { calls.push({ id, ...options }); return getFoods ? getFoods(id, options, calls.length) : rows(id) }
   }
   const globals = {
-    module: { exports: {} }, console: { error() {} },
+    module: { exports: {} }, HomePicture: {}, console: { error() {} },
     uniCloud: { importObject: () => service },
     getResumeRefreshState: last => ({ ...resume, shouldRefresh: resume.shouldRefresh && last !== resume.seq }),
     uni: {
@@ -34,10 +34,11 @@ function setup({ selected, categories = [{ cate_id: 0, name: '牛肉类' }, { ca
   }
   const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^[\t ]*import .*$/mg, '').replace('export default', 'module.exports =')
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../utils/tab-bar.js'), 'utf8').replace('export function', 'function'), globals)
   vm.runInNewContext(script, globals, { filename: sourcePath })
   const definition = globals.module.exports
   const page = Object.assign(definition.data(), definition.methods, { $showError: (...args) => toasts.push(args) })
-  return { page, calls, storage, resume, toasts, categoryCalls: () => categoryCalls,
+  return { page, calls, storage, resume, toasts, uni: globals.uni, categoryCalls: () => categoryCalls,
     load: () => definition.onLoad.call(page), show: () => definition.onShow.call(page),
     unload: () => definition.onUnload.call(page) }
 }
@@ -151,3 +152,44 @@ test('卸载后迟到结果不更新页面', async () => {
   const gate=deferred(),h=setup({getFoods:()=>gate.promise});const loading=h.load();await tick()
   h.unload();gate.resolve(rows('late'));await loading;assert.equal(h.page.cateLevel.length,0)
 })
+
+test('布局测量使用左右实际高度，不重复扣安全区，不触发业务请求', () => {
+  const h = setup();
+  const ticks = [], callbacks = [];
+  h.page.$nextTick = fn => ticks.push(fn);
+  // 与页面 VM 相同的 uni 对象由 setup 暴露。
+  h.uni.createSelectorQuery = () => {
+    const query = { in() { return this }, select() { return this }, boundingClientRect() { return this }, exec(fn) { callbacks.push(fn) } };
+    return query;
+  };
+  h.page.updateLayout(); ticks.splice(0).forEach(fn => fn());
+  callbacks.shift()([{ height: 410.8 }, { height: 370.2 }]);
+  assert.equal(h.page.wh, 410);
+  assert.equal(h.page.foodHeight, 370);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.categoryCalls(), 0);
+});
+
+test('旧窗口测量和卸载后的回调不能覆盖最新布局', () => {
+  const h = setup(), callbacks = [];
+  h.page.$nextTick = fn => fn();
+  h.uni.createSelectorQuery = () => ({ in() { return this }, select() { return this }, boundingClientRect() { return this }, exec(fn) { callbacks.push(fn) } });
+  h.page.updateLayout(); h.page.updateLayout();
+  callbacks[1]([{ height: 300 }, { height: 260 }]);
+  callbacks[0]([{ height: 500 }, { height: 460 }]);
+  assert.equal(h.page.foodHeight, 260);
+  h.page.updateLayout(); h.unload();
+  callbacks[2]([{ height: 700 }, { height: 660 }]);
+  assert.equal(h.page.foodHeight, 260);
+});
+
+test('首页目标分类定位到左栏，快速切换后滚动目标属于最后分类', async () => {
+  const h = setup({ selected: '4' });
+  const ticks = [];
+  h.page.$nextTick = fn => ticks.push(fn);
+  await h.load(); ticks.splice(0).forEach(fn => fn());
+  assert.equal(h.page.navTarget, 'category-entry-1');
+  await h.page.activeChanged(0); await h.page.activeChanged(1);
+  ticks.splice(0).forEach(fn => fn());
+  assert.equal(h.page.navTarget, 'category-entry-1');
+});

@@ -1,24 +1,21 @@
 <template>
-  <view class="page">
-    <view v-if="!hasLogin">
-      <notlogin :loading="authOperation === 'login'" @login="weixinLogin" />
+  <view class="kitchen-page">
+    <view class="kitchen-heading">
+      <image v-if="!titleFailed" class="kitchen-title" src="/static/my/kitchen-title.png" mode="aspectFit" aria-label="我的小厨房，好好吃饭，记录家的味道" @error="titleFailed = true" />
+      <view v-else class="heading-fallback"><text class="heading-name">我的小厨房</text><text class="heading-desc">好好吃饭，记录家的味道</text></view>
     </view>
-
-    <loggedin
-      v-else
-      :nickname="nickname"
-      :avatar="avatar"
-      :canManage="canManage"
-      :busy="!!authOperation"
-      :logoutLoading="authOperation === 'logout'"
-      @goAddDish="goAddDish"
-      @logout="logout"
-      @editProfile="goEditProfile"
-    />
+    <notlogin v-if="!hasLogin" :loading="authOperation === 'login'" @login="weixinLogin" />
+    <loggedin v-else :nickname="nickname" :avatar="avatar" :canManage="canManage" :busy="!!authOperation"
+      @goAddDish="goAddDish" @editProfile="goEditProfile" />
+    <view class="kitchen-art" :class="{ 'art-unavailable': chefFailed }">
+      <image v-if="!chefFailed" class="kitchen-chef" src="/static/my/kitchen-chef.png" mode="aspectFit" aria-label="约克夏厨师正在煮菜" @error="chefFailed = true" />
+    </view>
+    <button v-if="hasLogin" class="logout-button" :loading="authOperation === 'logout'" :disabled="!!authOperation" @click="logout">{{ authOperation === 'logout' ? '退出中...' : '退出登录' }}</button>
   </view>
 </template>
 
 <script>
+import { syncTabBar } from '@/utils/tab-bar.js'
 import { beginLoading } from '@/utils/loading.js'
 import notlogin from '@/components/notlogin.vue'
 import loggedin from '@/components/loggedin.vue'
@@ -40,6 +37,8 @@ export default {
   data() {
     return {
       hasLogin: false,
+      titleFailed: false,
+      chefFailed: false,
       nickname: '',
       avatar: '', // 展示用 URL（tempFileURL 或 http(s)）
       uid: '',
@@ -56,7 +55,11 @@ export default {
     this.lastResumeSeqHandled = getResumeRefreshState(0).seq
   },
 
+  onReady() {
+    syncTabBar(this, 2)
+  },
   async onShow() {
+    syncTabBar(this, 2)
     const resume = getResumeRefreshState(this.lastResumeSeqHandled)
     if (resume.seq) this.lastResumeSeqHandled = resume.seq
 
@@ -350,8 +353,20 @@ export default {
 </script>
 
 <style scoped>
-.page {
-  min-height: 100vh;
-  background: #f6f7fb;
-}
+.kitchen-page { min-height: 100vh; box-sizing: border-box; background: #FFFBEB; padding: 30rpx 28rpx 32rpx; color: #382518; }
+/* The shared tab bar owns its opaque safe-area background. Reserve its full height here. */
+/* #ifdef MP-WEIXIN */
+.kitchen-page { padding-bottom: calc(152rpx + env(safe-area-inset-bottom)); }
+/* #endif */
+.kitchen-heading { margin: 8rpx 0 24rpx; }
+.kitchen-title { display: block; width: 100%; height: 232rpx; }
+.heading-fallback { min-height: 232rpx; display: flex; flex-direction: column; justify-content: center; gap: 16rpx; }
+.heading-name { font-size: 64rpx; font-weight: 900; color: #382518; }
+.heading-desc { font-size: 29rpx; color: #58412A; }
+.kitchen-art { margin: 36rpx auto 24rpx; width: 100%; max-width: 680rpx; }
+.kitchen-chef { display: block; width: 100%; height: 650rpx; }
+.art-unavailable { height: 80rpx; }
+.logout-button { width: 100%; box-sizing: border-box; margin: 32rpx 0 20rpx; padding: 0 18rpx; height: 88rpx; display: flex; align-items: center; justify-content: center; line-height: 1.3; border: 2rpx solid #FF5151; border-radius: 20rpx; background: #FFF5EF; color: #FF5151; font-size: 32rpx; font-weight: 700; }
+.logout-button::after { border: 0; }
+.logout-button[disabled] { color: #FF5151; background: #FFF5EF; opacity: .55; }
 </style>

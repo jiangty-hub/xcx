@@ -1,22 +1,28 @@
 {
 	"pages": [
 	{
-		"path": "pages/home/home"
+		"path": "pages/home/home",
+		"style": { "navigationBarBackgroundColor": "#FFFBEB", "backgroundColor": "#FFFBEB" }
 	},
 	{
-		"path": "pages/category/category"
+		"path": "pages/category/category",
+		"style": { "navigationBarBackgroundColor": "#FFFBEB", "backgroundColor": "#FFFBEB", "disableScroll": true }
 	},
 	{
-		"path": "pages/my/my"
+		"path": "pages/my/my",
+		"style": { "navigationBarBackgroundColor": "#FFFBEB", "backgroundColor": "#FFFBEB" }
 	},
 	{
 	  "path": "pages/profile/edit",
 	  "style": {
-	    "navigationBarTitleText": "修改资料"
+	    "navigationBarTitleText": "修改资料",
+	    "navigationBarBackgroundColor": "#FFFBEB",
+	    "backgroundColor": "#FFFBEB"
 	  }
 	},
 	{
-		"path": "pages/addDish/addDish"
+		"path": "pages/addDish/addDish",
+		"style": { "navigationBarBackgroundColor": "#FFFBEB", "backgroundColor": "#FFFBEB" }
 	}
 ],
 	"subPackages": [
@@ -25,12 +31,14 @@
 			"pages": [
 				{
 					"path": "goods_detail/goods_detail",
-					"style": {}
+					"style": { "navigationBarBackgroundColor": "#FFFBEB", "backgroundColor": "#FFFBEB" }
 				},
 				{
 					"path": "search/search",
 					"style": {
-						"navigationBarTitleText": ""
+						"navigationBarTitleText": "搜索菜品",
+						"navigationBarBackgroundColor": "#FFFBEB",
+						"backgroundColor": "#FFFBEB"
 					}
 				}
 			]
@@ -46,7 +54,12 @@
 		}
 	},
 	"tabBar": {
-		"selectedColor": "#dc143c",
+		"selectedColor": "#C58A00",
+		"color": "#777983",
+		"backgroundColor": "#FFFEFA",
+		// #ifdef MP-WEIXIN
+		"custom": true,
+		// #endif
 		"list": [
 			{
 				"pagePath": "pages/home/home",

@@ -1,0 +1,12 @@
+<view class="tab-shell">
+  <view class="tab-bar">
+    <button wx:for="{{items}}" wx:key="path" class="tab-button {{selected === index ? 'is-selected' : ''}}" data-index="{{index}}" bindtap="switchTab" hover-class="tab-pressed" aria-label="{{item.text}}">
+      <view class="tab-icon icon-{{item.icon}}" aria-hidden="true">
+        <block wx:if="{{item.icon === 'home'}}"><view class="house-roof"></view><view class="house-body"></view><view class="house-door"></view></block>
+        <block wx:elif="{{item.icon === 'category'}}"><view class="square"></view><view class="square"></view><view class="square"></view><view class="square"></view></block>
+        <block wx:else><view class="profile-head"></view><view class="profile-body"></view></block>
+      </view>
+      <text class="tab-label">{{item.text}}</text>
+    </button>
+  </view>
+</view>

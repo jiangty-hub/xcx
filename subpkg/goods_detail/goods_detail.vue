@@ -1,105 +1,63 @@
 <template>
-  <view class="page">
+  <view class="detail-page" :class="{ 'has-actions': showActions }">
     <view v-if="loading" class="detail-state">菜品加载中...</view>
-    <view v-else-if="loadError" class="detail-state error-state">
+    <view v-else-if="loadError" class="detail-state">
       <text>{{ loadError }}</text>
-      <button size="mini" @click="retryDetail">重试</button>
+      <button v-if="foodId" class="retry-btn" size="mini" @click="retryDetail">重试</button>
     </view>
     <block v-else>
-    <!-- 菜品轮播图 -->
-    <swiper
-      class="dish-swiper"
-      :indicator-dots="true"
-      :autoplay="true"
-      :interval="3000"
-      :duration="1000"
-      :circular="true"
-      indicator-color="rgba(255, 255, 255, 0.5)"
-      indicator-active-color="#ff6b35"
-    >
-      <swiper-item v-for="(item, i) in dishImages" :key="i">
-        <image class="dish-images" :src="fixImg(item)" mode="aspectFill"></image>
-      </swiper-item>
-    </swiper>
-
-    <!-- 菜品主要信息 -->
-    <view class="dish-main-card">
-      <view class="dish-header">
-        <view class="dish-name">{{ cid_info.name }}</view>
-        <view class="dish-category">{{ cid_info.categoryName || cid_info.category || '' }}</view>
+      <view class="cover-frame">
+        <swiper class="dish-swiper" :indicator-dots="dishImages.length > 1" :autoplay="dishImages.length > 1"
+          :circular="dishImages.length > 1" :interval="3000" :duration="1000"
+          indicator-color="rgba(255,255,255,0.7)" indicator-active-color="#E5A500">
+          <swiper-item v-for="(item, i) in dishImages" :key="i">
+            <image class="dish-images" :src="failedImages[i] ? '/static/cover-default.png' : fixImg(item)"
+              mode="aspectFill" @error="onCoverError(i)" />
+          </swiper-item>
+        </swiper>
       </view>
-
-      <view class="dish-tags">
-        <text class="tag" v-for="(tag, index) in (cid_info.tags || [])" :key="index">{{ tag }}</text>
-      </view>
-
-      <view class="dish-price-row">
+      <view class="dish-main-card">
+        <view class="dish-header">
+          <view class="name-group">
+            <text class="dish-name">{{ cid_info.name || '未命名菜品' }}</text>
+            <image v-if="!badgeFailed" class="chef-badge" src="/static/detail/chef-badge.png" mode="aspectFit" @error="badgeFailed = true" />
+          </view>
+          <text v-if="categoryLabel" class="dish-category">{{ categoryLabel }}</text>
+        </view>
+        <view v-if="displayTags.length" class="dish-tags">
+          <text v-for="(tag, index) in displayTags" :key="index" class="tag">{{ tag }}</text>
+        </view>
         <view class="price-box">
-          <text class="price-symbol">¥</text>
-          <text class="price-value">{{ formatPrice(cid_info.price) }}</text>
+          <text class="price-symbol">¥</text><text class="price-value">{{ formatPrice(cid_info.price) }}</text>
           <text class="tax">（税込）</text>
         </view>
+        <view v-if="summaryText" class="dish-summary">{{ summaryText }}</view>
       </view>
-
-      <view class="dish-summary">{{ cid_info.summary }}</view>
-    </view>
-
-    <!-- 菜品属性 -->
-    <view class="dish-attributes">
-      <view class="attr-item">
-        <view class="attr-icon">🌶️</view>
-        <view class="attr-label">口味</view>
-        <view class="attr-value">{{ cid_info.flavor }}</view>
+      <view class="dish-attributes">
+        <view class="attr-item"><text class="attr-icon">🌶️</text><text class="attr-label">口味</text><text class="attr-value">{{ displayText(cid_info.flavor) || '未填写' }}</text></view>
+        <view class="attr-item"><text class="attr-icon">⏱️</text><text class="attr-label">时长</text><text class="attr-value">{{ timeLabel }}</text></view>
+        <view class="attr-item"><text class="attr-icon">👨‍🍳</text><text class="attr-label">难度</text><text class="attr-value">{{ displayText(cid_info.difficulty) || '未填写' }}</text></view>
       </view>
-      <view class="attr-item">
-        <view class="attr-icon">⏱️</view>
-        <view class="attr-label">时长</view>
-        <view class="attr-value">{{ cid_info.cook_time }}分钟</view>
+      <view class="section-card">
+        <view class="section-title"><text class="section-icon">🥘</text><text>食材清单</text></view>
+        <view v-if="displayIngredients.length" class="ingredients-list">
+          <view v-for="(item, index) in displayIngredients" :key="index" class="ingredient-item"><view class="ingredient-dot" /><text class="ingredient-name">{{ item }}</text></view>
+        </view>
+        <text v-else class="empty-text">暂未填写食材</text>
       </view>
-      <view class="attr-item">
-        <view class="attr-icon">👨‍🍳</view>
-        <view class="attr-label">难度</view>
-        <view class="attr-value">{{ cid_info.difficulty }}</view>
+      <view class="section-card">
+        <view class="section-title"><text class="section-icon">📝</text><text>制作步骤</text></view>
+        <view v-if="displaySteps.length" class="steps-list">
+          <view v-for="(step, index) in displaySteps" :key="index" class="step-item"><view class="step-number">{{ index + 1 }}</view><text class="step-content">{{ step }}</text></view>
+        </view>
+        <text v-else class="empty-text">暂未填写步骤</text>
       </view>
-    </view>
-
-    <!-- 食材清单 -->
-    <view class="section-card">
-      <view class="section-title">
-        <view class="title-text">🥘 食材清单</view>
-      </view>
-      <view class="ingredients-list">
-        <view class="ingredient-item" v-for="(item, index) in (cid_info.ingredients || [])" :key="index">
-          <view class="ingredient-dot"></view>
-          <text class="ingredient-name">{{ item.name || item }}</text>
+      <view v-if="showActions" class="actions-dock">
+        <view class="bottom-actions">
+          <button class="action-btn delete-btn" :disabled="deleting" @click="onDelete"><view class="trash-icon"><view /></view><text>{{ deleting ? '删除中...' : '删除菜品' }}</text></button>
+          <button class="action-btn edit-btn" :disabled="deleting" @click="onEdit"><text class="btn-icon">📝</text><text>修改菜品</text></button>
         </view>
       </view>
-    </view>
-
-    <!-- 制作步骤 -->
-    <view class="section-card">
-      <view class="section-title">
-        <view class="title-text">📝 制作步骤</view>
-      </view>
-      <view class="steps-list">
-        <view class="step-item" v-for="(step, index) in (cid_info.steps || [])" :key="index">
-          <view class="step-number">{{ index + 1 }}</view>
-          <view class="step-content">{{ step }}</view>
-        </view>
-      </view>
-    </view>
-
-    <!-- ✅ 底部操作按钮：只有有权限才显示 -->
-    <view class="bottom-actions" v-if="canManage">
-      <view class="action-btn collect-btn" :class="{ disabled: deleting }" @click="onDelete">
-        <text class="btn-icon">🗑️</text>
-        <text class="btn-text">{{ deleting ? '删除中...' : '删除菜品' }}</text>
-      </view>
-      <view class="action-btn primary-btn" :class="{ disabled: deleting }" @click="onEdit">
-        <text class="btn-icon">📝</text>
-        <text class="btn-text">修改菜品</text>
-      </view>
-    </view>
     </block>
   </view>
 </template>
@@ -119,6 +77,8 @@ export default {
       loading: true,
       loadError: '',
       deleting: false,
+      badgeFailed: false,
+      failedImages: {},
 
       // ✅ 权限
       canManage: false,
@@ -166,9 +126,24 @@ export default {
   },
 
   computed: {
+    showActions() { return !this.loading && !this.loadError && this.canManage },
+    displayTags() { return this.textList(this.cid_info.tags) },
+    displayIngredients() { return this.textList(this.cid_info.ingredients, true) },
+    displaySteps() { return this.textList(this.cid_info.steps) },
+    categoryLabel() { return this.displayText(this.cid_info.categoryName || this.cid_info.category) },
+    summaryText() { return this.displayText(this.cid_info.summary) },
+    timeLabel() {
+      const value = this.cid_info.cook_time
+      if (value === null || value === undefined || String(value).trim() === '') return '未填写'
+      const minutes = Number(value)
+      return Number.isFinite(minutes) && minutes >= 0 ? minutes + '分钟' : '未填写'
+    },
     dishImages() {
       const u = this.cid_info?.cover_urls
-      if (Array.isArray(u) && u.length) return u
+      if (Array.isArray(u)) {
+        const urls = u.filter(x => typeof x === 'string' && x.trim())
+        if (urls.length) return urls
+      }
 
       const b = this.cid_info?.cover_images
       if (Array.isArray(b) && b.length) {
@@ -181,6 +156,14 @@ export default {
   },
 
   methods: {
+    displayText(value) { return typeof value === 'string' ? value.trim() : '' },
+    textList(value, objects = false) {
+      if (!Array.isArray(value)) return []
+      return value.map(item => this.displayText(objects && item && typeof item === 'object' ? item.name : item)).filter(Boolean)
+    },
+    onCoverError(index) {
+      if (!this.failedImages[index]) this.failedImages = { ...this.failedImages, [index]: true }
+    },
     // ✅ 统一取 token：兼容不同项目里存 token 的 key
     getToken() {
       return getAuthToken()
@@ -211,6 +194,7 @@ export default {
         this.loadError = ''
         const dish = await foodService.getFoodDetail(id)
         this.cid_info = dish || {}
+        this.failedImages = {}
       } catch (err) {
         this.cid_info = {}
         this.loadError = err?.message || '未找到菜品'
@@ -310,293 +294,60 @@ export default {
 }
 </script>
 
-<style lang="scss">
-page {
-  background: #f5f5f5;
-}
-
-.page {
-  padding-bottom: 120rpx;
-}
-
-.detail-state {
-  min-height: 70vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 24rpx;
-  color: #999;
-}
-
-.error-state {
-  color: #666;
-}
-
-.action-btn.disabled {
-  opacity: 0.6;
-  pointer-events: none;
-}
-
-/* 轮播图样式 */
-.dish-swiper {
-  width: 100%;
-  height: 500rpx;
-  position: relative;
-}
-
-.dish-images {
-  width: 100%;
-  height: 100%;
-}
-
-/* 主要信息卡片 */
-.dish-main-card {
-  background: #fff;
-  margin: -40rpx 20rpx 20rpx;
-  border-radius: 24rpx;
-  padding: 30rpx;
-  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
-  position: relative;
-  z-index: 10;
-}
-
-.dish-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20rpx;
-}
-
-.dish-name {
-  font-size: 40rpx;
-  font-weight: bold;
-  color: #333;
-  flex: 1;
-}
-
-.dish-category {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: #fff;
-  padding: 8rpx 20rpx;
-  border-radius: 30rpx;
-  font-size: 24rpx;
-}
-
-.dish-tags {
-  display: flex;
-  gap: 16rpx;
-  margin-bottom: 24rpx;
-  flex-wrap: wrap;
-}
-
-.tag {
-  background: #fff3e0;
-  color: #ff6b35;
-  padding: 8rpx 20rpx;
-  border-radius: 20rpx;
-  font-size: 24rpx;
-  border: 1rpx solid #ffecb3;
-}
-
-.dish-price-row {
-  margin-bottom: 24rpx;
-}
-
-.price-box {
-  display: flex;
-  align-items: baseline;
-}
-
-.price-symbol {
-  font-size: 32rpx;
-  color: #ff6b35;
-  font-weight: bold;
-}
-
-.price-value {
-  font-size: 56rpx;
-  color: #ff6b35;
-  font-weight: bold;
-  margin: 0 8rpx;
-}
-
-.tax {
-  font-size: 24rpx;
-  color: #999;
-}
-
-.dish-summary {
-  color: #666;
-  font-size: 28rpx;
-  line-height: 1.6;
-  padding: 20rpx;
-  background: #f8f9fa;
-  border-radius: 12rpx;
-  border-left: 4rpx solid #ff6b35;
-}
-
-/* 属性标签 */
-.dish-attributes {
-  display: flex;
-  justify-content: space-around;
-  background: #fff;
-  margin: 20rpx;
-  border-radius: 24rpx;
-  padding: 30rpx 20rpx;
-  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
-}
-
-.attr-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12rpx;
-}
-
-.attr-icon {
-  font-size: 48rpx;
-}
-
-.attr-label {
-  font-size: 24rpx;
-  color: #999;
-}
-
-.attr-value {
-  font-size: 28rpx;
-  color: #333;
-  font-weight: 600;
-}
-
-/* 通用卡片样式 */
-.section-card {
-  background: #fff;
-  margin: 20rpx;
-  border-radius: 24rpx;
-  padding: 30rpx;
-  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
-}
-
-.section-title {
-  margin-bottom: 24rpx;
-  padding-bottom: 20rpx;
-  border-bottom: 2rpx solid #f0f0f0;
-}
-
-.title-text {
-  font-size: 32rpx;
-  font-weight: bold;
-  color: #333;
-}
-
-/* 食材清单 */
-.ingredients-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20rpx;
-}
-
-.ingredient-item {
-  display: flex;
-  align-items: center;
-  background: #f8f9fa;
-  padding: 16rpx 24rpx;
-  border-radius: 30rpx;
-  gap: 12rpx;
-}
-
-.ingredient-dot {
-  width: 12rpx;
-  height: 12rpx;
-  background: #ff6b35;
-  border-radius: 50%;
-}
-
-.ingredient-name {
-  font-size: 28rpx;
-  color: #333;
-}
-
-/* 制作步骤 */
-.steps-list {
-  display: flex;
-  flex-direction: column;
-  gap: 24rpx;
-}
-
-.step-item {
-  display: flex;
-  gap: 20rpx;
-  align-items: flex-start;
-}
-
-.step-number {
-  width: 48rpx;
-  height: 48rpx;
-  background: linear-gradient(135deg, #ff6b35 0%, #ff8c61 100%);
-  color: #fff;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24rpx;
-  font-weight: bold;
-  flex-shrink: 0;
-}
-
-.step-content {
-  flex: 1;
-  font-size: 28rpx;
-  color: #666;
-  line-height: 1.8;
-  padding-top: 8rpx;
-}
-
-/* 底部操作按钮 */
-.bottom-actions {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: #fff;
-  padding: 20rpx;
-  box-shadow: 0 -4rpx 20rpx rgba(0, 0, 0, 0.08);
-  display: flex;
-  gap: 20rpx;
-  z-index: 100;
-}
-
-.action-btn {
-  height: 88rpx;
-  border-radius: 44rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12rpx;
-  font-size: 28rpx;
-  font-weight: 600;
-}
-
-.collect-btn {
-  width: 180rpx;
-  background: #f8f9fa;
-  color: #666;
-  border: 2rpx solid #e0e0e0;
-}
-
-.btn-icon {
-  font-size: 32rpx;
-}
-
-.primary-btn {
-  flex: 1;
-  background: linear-gradient(135deg, #ff6b35 0%, #ff8c61 100%);
-  color: #fff;
-  box-shadow: 0 8rpx 16rpx rgba(255, 107, 53, 0.3);
-}
-
-.btn-text {
-  font-size: 28rpx;
-}
+<style>
+page { background: #FFFBEB; }
+</style>
+<style scoped lang="scss">
+.detail-page { --dock-height: 132rpx; min-height: 100vh; box-sizing: border-box; padding: 16rpx 0 calc(24rpx + env(safe-area-inset-bottom)); background: #FFFBEB; color: #382518; }
+.detail-page.has-actions { padding-bottom: calc(var(--dock-height) + 28rpx + env(safe-area-inset-bottom)); }
+.detail-state { min-height: 65vh; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 24rpx; padding: 32rpx; color: #938778; text-align: center; }
+.retry-btn { background: #FFF0B3; color: #79521B; border-radius: 40rpx; }
+.cover-frame { margin: 0 20rpx; border-radius: 32rpx; overflow: hidden; transform: translateZ(0); background: #F7ECCC; }
+.dish-swiper { width: 100%; height: 400rpx; }
+.dish-images { width: 100%; height: 100%; }
+.dish-main-card, .dish-attributes, .section-card { margin: 18rpx 20rpx; border-radius: 34rpx; background: #FFFEF9; box-shadow: 0 8rpx 24rpx rgba(174,130,34,.055); }
+.dish-main-card { position: relative; margin-top: -34rpx; padding: 22rpx 26rpx 24rpx; z-index: 1; }
+.dish-header { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12rpx; }
+.name-group { display: flex; align-items: center; flex: 1 1 360rpx; min-width: 0; gap: 10rpx; }
+.dish-name { font-size: 46rpx; font-weight: 800; line-height: 1.3; overflow-wrap: anywhere; min-width: 0; }
+.chef-badge { width: 100rpx; height: 108rpx; flex-shrink: 0; }
+.dish-category { margin-top: 16rpx; max-width: 100%; box-sizing: border-box; padding: 10rpx 24rpx; border-radius: 40rpx; background: #FFE889; font-size: 26rpx; font-weight: 700; overflow-wrap: anywhere; }
+.dish-tags { display: flex; flex-wrap: wrap; gap: 12rpx; margin: 4rpx 0 16rpx; }
+.tag { padding: 9rpx 22rpx; border-radius: 36rpx; background: #FFF2C6; color: #F36C26; font-size: 26rpx; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
+.price-box { display: flex; align-items: baseline; flex-wrap: wrap; padding: 4rpx 0 14rpx; color: #FF692A; }
+.price-symbol { font-size: 34rpx; font-weight: 700; }
+.price-value { font-size: 62rpx; font-weight: 800; line-height: 1.25; margin-right: 12rpx; overflow-wrap: anywhere; max-width: 100%; }
+.tax { color: #938778; font-size: 25rpx; }
+.dish-summary { padding: 20rpx; border-left: 5rpx solid #E9AA00; border-radius: 12rpx; background: #FCF6DF; color: #857A6D; font-size: 28rpx; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dish-attributes { display: flex; padding: 24rpx 6rpx; }
+.attr-item { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; align-items: center; gap: 8rpx; padding: 0 12rpx; text-align: center; }
+.attr-item + .attr-item::before { content: ''; position: absolute; top: 22rpx; bottom: 16rpx; left: 0; width: 1rpx; background: #EEE2C9; }
+.attr-icon { font-size: 48rpx; line-height: 1.2; }
+.attr-label { color: #97897B; font-size: 26rpx; }
+.attr-value { font-size: 28rpx; font-weight: 700; line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
+.section-card { padding: 24rpx 26rpx; }
+.section-title { display: flex; align-items: center; gap: 18rpx; padding-bottom: 18rpx; margin-bottom: 20rpx; border-bottom: 1rpx solid #EEE4CF; font-size: 34rpx; font-weight: 800; }
+.section-icon { font-size: 38rpx; }
+.ingredients-list { display: flex; flex-wrap: wrap; gap: 16rpx; }
+.ingredient-item { display: flex; align-items: center; gap: 12rpx; padding: 13rpx 22rpx; border-radius: 40rpx; background: #FFF3C7; max-width: 100%; box-sizing: border-box; }
+.ingredient-dot { width: 12rpx; height: 12rpx; flex-shrink: 0; border-radius: 50%; background: #E6A000; }
+.ingredient-name { font-size: 28rpx; min-width: 0; overflow-wrap: anywhere; }
+.steps-list { display: flex; flex-direction: column; gap: 22rpx; }
+.step-item { display: flex; align-items: flex-start; gap: 24rpx; }
+.step-number { min-width: 54rpx; height: 54rpx; padding: 0 6rpx; box-sizing: border-box; border-radius: 30rpx; background: #E9A900; color: white; display: flex; align-items: center; justify-content: center; font-size: 30rpx; font-weight: 700; flex-shrink: 0; }
+.step-content { flex: 1; min-width: 0; padding-top: 5rpx; font-size: 29rpx; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.empty-text { color: #A09484; font-size: 26rpx; line-height: 1.6; }
+/* The opaque dock covers the safe area; the page reserves the same total height. */
+.actions-dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; height: calc(var(--dock-height) + env(safe-area-inset-bottom)); box-sizing: border-box; padding: 8rpx 20rpx calc(8rpx + env(safe-area-inset-bottom)); background: #FFFBEB; }
+.bottom-actions { height: 116rpx; box-sizing: border-box; padding: 14rpx; border-radius: 34rpx; display: flex; gap: 16rpx; background: #FFFEF9; box-shadow: 0 -4rpx 24rpx rgba(174,130,34,.05); }
+.action-btn { margin: 0; min-width: 0; height: 88rpx; padding: 0 8rpx; box-sizing: border-box; border-radius: 44rpx; display: flex; align-items: center; justify-content: center; gap: 12rpx; font-size: 29rpx; font-weight: 700; line-height: 1.3; }
+.action-btn::after { border: 0; }
+.delete-btn { flex: 0.85; border: 2rpx solid #FF692A; color: #FF692A; background: #FFFEF9; }
+.edit-btn { flex: 1.15; color: #382518; background: linear-gradient(110deg, #FFE998, #FFDF65); }
+.action-btn[disabled] { opacity: .55; }
+.btn-icon { font-size: 36rpx; }
+.trash-icon { position: relative; width: 23rpx; height: 29rpx; border: 3rpx solid currentColor; border-top: 0; border-radius: 0 0 4rpx 4rpx; box-sizing: border-box; margin: 7rpx 4rpx 0; }
+.trash-icon::before { content: ''; position: absolute; top: -6rpx; left: -6rpx; width: 29rpx; border-top: 3rpx solid currentColor; }
+.trash-icon::after { content: ''; position: absolute; width: 9rpx; height: 5rpx; border: 3rpx solid currentColor; border-bottom: 0; top: -12rpx; left: 4rpx; }
+.trash-icon view { height: 16rpx; width: 5rpx; margin: 5rpx auto 0; border-left: 2rpx solid currentColor; border-right: 2rpx solid currentColor; }
 </style>

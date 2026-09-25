@@ -1,57 +1,67 @@
 <template>
-  <view>
-    <view class="search-box">
-      <uni-search-bar v-model="kw" @input="onInput" :radius="100" cancelButton="none" />
+  <view class="search-page">
+    <view class="search-header">
+      <view class="search-input-shell">
+        <view class="search-glass" aria-hidden="true"></view>
+        <input class="search-input" :value="kw" :focus="false" :maxlength="50" placeholder="请输入搜索内容" placeholder-class="search-placeholder" confirm-type="search" @input="onInput($event.detail.value)" @confirm="onConfirm" />
+        <button v-if="kw" class="search-clear" aria-label="清空搜索内容" @click="onInput('')"><uni-icons type="clear" color="#998A75" :size="20" /></button>
+      </view>
     </view>
 
-    <view v-if="loading" class="search-state">搜索中...</view>
-    <view v-else-if="searchError" class="search-state error-state">
-      <text>{{ searchError }}</text>
-      <button size="mini" @click="retrySearch">重试</button>
-    </view>
-
-    <!-- 搜索结果 -->
-    <view v-else-if="searchResults.length">
-      <view class="sugg-list">
-        <view class="sugg-item" v-for="(item, i) in searchResults" :key="item._id || item.foodId || i" @click="gotoDetail(item)">
-          <!-- 改：优先用 cover_urls[0] 展示（后端 searchFoods 已补 cover_urls） -->
-          <image :src="getCover(item)" class="item-image" mode="aspectFill" />
-          <text class="item-text">{{ item.name }}</text>
+    <view class="search-content">
+      <view v-if="pendingSearch || loading" class="search-status" role="status">
+        <view class="search-loading-dot"></view><text>{{ pendingSearch ? '正在准备搜索…' : '搜索中…' }}</text>
+      </view>
+      <view v-else-if="searchError" class="search-status">
+        <text class="search-state-title">搜索未完成</text><text>{{ searchError }}</text>
+        <button class="search-retry" size="mini" @click="retrySearch">重试</button>
+      </view>
+      <view v-else-if="searchResults.length">
+        <view class="search-results">
+          <button v-for="(item, i) in searchResults" :key="item._id || item.foodId || i" class="search-dish-card" hover-class="search-pressed" @click="gotoDetail(item)">
+            <view class="search-dish-ratio"><view class="search-dish-image"><home-picture :src="getCover(item)" /></view></view>
+            <view class="search-dish-caption"><text>{{ item.name }}</text></view>
+          </button>
+        </view>
+        <view v-if="loadingMore" class="search-footer">加载更多…</view>
+        <view v-else-if="!searchHasMore" class="search-footer">已经到底了</view>
+      </view>
+      <view v-else-if="hasSearched && kw.trim()" class="search-history-card">
+        <view class="search-empty">
+          <image class="search-empty-image" src="/static/search/search-empty.png" mode="aspectFit" />
+          <text class="search-state-title">没有找到相关菜品</text>
+          <text class="search-state-hint">换个关键词试试吧</text>
         </view>
       </view>
-      <view v-if="loadingMore" class="load-more-state">加载更多...</view>
-      <view v-else-if="!searchHasMore" class="load-more-state">已经到底了</view>
-    </view>
-
-    <view v-else-if="hasSearched && kw.trim()" class="search-state">没有找到相关菜品</view>
-
-    <!-- 搜索历史 -->
-    <view class="history-box" v-else>
-      <view class="history-title">
-        <text>搜索历史</text>
-        <uni-icons type="trash" size="19" @click="clean" />
+      <view v-else class="search-history-card">
+        <view class="search-history-heading">
+          <text>搜索历史</text>
+          <button class="search-delete" :disabled="!histories.length" aria-label="清空搜索历史" @click="clean"><uni-icons type="trash" color="#837A70" :size="25" /></button>
+        </view>
+        <view v-if="histories.length" class="search-history-tags">
+          <button v-for="item in histories" :key="item" class="search-history-tag" hover-class="search-pressed" @click="gotoHistory(item)">{{ item }}</button>
+        </view>
+        <view v-else class="search-empty">
+          <image class="search-empty-image" src="/static/search/search-empty.png" mode="aspectFit" />
+          <text class="search-state-title">暂无搜索历史</text>
+          <text class="search-state-hint">搜搜今天想吃的菜吧</text>
+        </view>
       </view>
-      <view class="history-list" v-if="histories.length">
-        <uni-tag
-          type="default"
-          :text="item"
-          v-for="(item, i) in histories"
-          :key="i"
-          @click="gotoHistory(item)"
-        />
-      </view>
-      <view v-else class="history-empty">暂无搜索历史</view>
     </view>
   </view>
 </template>
 
 <script>
+import HomePicture from '@/components/home/home-picture.vue'
 import { getResumeRefreshState } from '@/utils/resume-refresh.js'
 
 export default {
+  components: { HomePicture },
   data() {
     return {
       timer: null,
+      pendingSearch: false,
+      requestKeyword: '',
       searchSeq: 0,
       kw: '',
       searchResults: [],
@@ -76,7 +86,7 @@ export default {
     try {
       const stored = uni.getStorageSync('kw')
       const parsed = typeof stored === 'string' ? JSON.parse(stored || '[]') : stored
-      this.historyList = Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string').slice(-20) : []
+      this.historyList = Array.isArray(parsed) ? [...new Set(parsed.filter(item => typeof item === 'string' && item.trim()).map(item => item.trim()))].slice(-20) : []
     } catch (e) {
       this.historyList = []
       uni.removeStorageSync('kw')
@@ -88,16 +98,14 @@ export default {
     const shouldRefresh = this.refreshOnDetailReturn || resume.shouldRefresh
     this.refreshOnDetailReturn = false
     if (shouldRefresh && String(this.kw || '').trim()) {
-      clearTimeout(this.timer)
-      this.timer = null
-      this.searchPage = 1
-      this.searchHasMore = false
-      await this.search(++this.searchSeq)
+      await this.submitSearch(this.kw, { force: true })
     }
   },
 
   onUnload() {
     clearTimeout(this.timer)
+    this.timer = null
+    this.pendingSearch = false
     this.searchSeq += 1
   },
 
@@ -113,29 +121,51 @@ export default {
   methods: {
     onInput(val) {
       clearTimeout(this.timer)
+      this.timer = null
+      this.kw = typeof val === 'string' ? val : ''
       const seq = ++this.searchSeq
-      if (!String(val || '').trim()) {
-        this.kw = ''
-        this.searchResults = []
-        this.hasSearched = false
-        this.searchError = ''
-        this.loading = false
-        this.loadingMore = false
-        this.searchPage = 1
-        this.searchHasMore = false
-        return
-      }
-      // 新关键词进入防抖等待后，立即禁用旧结果的续页，避免不同关键词串页。
+      this.searchResults = []
+      this.searchError = ''
+      this.loading = false
+      this.loadingMore = false
       this.searchPage = 1
       this.searchHasMore = false
-      this.loadingMore = false
+      this.hasSearched = false
+      this.pendingSearch = false
+      const keyword = this.kw.trim()
+      if (!keyword) return
+      if (keyword.length > 50) {
+        this.searchError = '搜索关键词最长50字符，请缩短后重试'
+        return
+      }
+      this.pendingSearch = true
       this.timer = setTimeout(() => {
-        this.kw = val
+        this.timer = null
+        if (seq !== this.searchSeq) return
+        this.pendingSearch = false
         this.search(seq)
       }, 400)
     },
 
+    onConfirm(event) {
+      uni.hideKeyboard()
+      return this.submitSearch(event?.detail?.value ?? this.kw)
+    },
+
+    submitSearch(value, { force = false } = {}) {
+      clearTimeout(this.timer)
+      this.timer = null
+      this.pendingSearch = false
+      this.kw = typeof value === 'string' ? value : ''
+      const keyword = this.kw.trim()
+      if (!force && this.loading && this.requestKeyword === keyword) return
+      this.searchPage = 1
+      this.searchHasMore = false
+      return this.search(++this.searchSeq)
+    },
+
     async search(seq = ++this.searchSeq, { append = false } = {}) {
+      if (seq !== this.searchSeq) return
       const keyword = (this.kw || '').trim()
       if (!keyword) {
         if (seq === this.searchSeq) {
@@ -150,10 +180,20 @@ export default {
         return
       }
 
+      if (keyword.length > 50) {
+        this.searchResults = []
+        this.searchError = '搜索关键词最长50字符，请缩短后重试'
+        this.searchHasMore = false
+        this.loading = false
+        this.loadingMore = false
+        return
+      }
+
       if (append) {
-        if (this.loading || this.loadingMore || !this.searchHasMore) return
+        if (this.pendingSearch || this.loading || this.loadingMore || !this.searchHasMore) return
         this.loadingMore = true
       } else {
+        this.requestKeyword = keyword
         this.loading = true
         this.loadingMore = false
       }
@@ -267,13 +307,12 @@ export default {
     },
 
     gotoHistory(item) {
-      clearTimeout(this.timer)
-      this.kw = item
-      this.search(++this.searchSeq)
+      uni.hideKeyboard()
+      return this.submitSearch(item)
     },
 
     retrySearch() {
-      this.search(++this.searchSeq)
+      return this.submitSearch(this.kw, { force: true })
     }
   },
 
@@ -285,94 +324,37 @@ export default {
 }
 </script>
 
-<style lang="scss">
-.search-box {
-  position: sticky;
-  top: 0;
-  z-index: 999;
-}
-
-.search-state {
-  min-height: 360rpx;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 20rpx;
-  color: #999;
-}
-
-.error-state {
-  color: #666;
-}
-
-.item-image {
-  width: 90%;
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
-  border-radius: 12px;
-  display: block;
-}
-
-.item-text {
-  margin-top: 6px;
-  text-align: center;
-  font-size: 28rpx;
-  line-height: 1.3;
-}
-
-.sugg-list {
-  display: flex;
-  flex-wrap: wrap;
-}
-
-.load-more-state {
-  padding: 20rpx 0 32rpx;
-  text-align: center;
-  color: #999;
-  font-size: 24rpx;
-}
-
-.sugg-item {
-  width: 50%;
-  padding: 10px 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  // 立体卡片效果
-  background: #fff;
-  border-radius: 16px;
-  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
-  margin-bottom: 16px;
-}
-
-.history-box {
-  padding: 0 5px;
-
-  .history-title {
-    display: flex;
-    justify-content: space-between;
-    height: 40px;
-    align-items: center;
-    font-size: 13px;
-    border-bottom: 1px solid #efefef;
-  }
-
-  .history-list {
-    display: flex;
-    flex-wrap: wrap;
-  }
-
-  .history-empty {
-    padding: 80rpx 0;
-    text-align: center;
-    color: #999;
-    font-size: 26rpx;
-  }
-
-  .uni-tag {
-    margin-top: 5px;
-    margin-right: 5px;
-  }
-}
+<style lang="scss" scoped>
+.search-page { min-height: 100vh; box-sizing: border-box; background: #fffbeb; color: #35291e; padding-bottom: calc(32rpx + env(safe-area-inset-bottom)); }
+.search-header { position: sticky; top: 0; z-index: 20; background: #fffbeb; padding: 22rpx 28rpx 24rpx; }
+.search-input-shell { display: flex; align-items: center; height: 80rpx; border-radius: 44rpx; background: #fff0bb; padding: 0 28rpx 0 32rpx; }
+.search-glass { position: relative; width: 29rpx; height: 29rpx; border: 4rpx solid #b88200; border-radius: 50%; margin-right: 28rpx; flex-shrink: 0; }
+.search-glass::after { content: ''; position: absolute; right: -12rpx; bottom: -5rpx; width: 17rpx; height: 4rpx; border-radius: 4rpx; background: #b88200; transform: rotate(48deg); }
+.search-input { flex: 1; min-width: 0; height: 76rpx; font-size: 30rpx; color: #35291e; }
+.search-placeholder { color: #998a75; }
+.search-clear, .search-delete { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 64rpx; height: 64rpx; padding: 0; margin: 0 -10rpx 0 6rpx; background: transparent; line-height: 1; }
+.search-clear::after, .search-delete::after, .search-history-tag::after, .search-dish-card::after { border: none; }
+.search-delete[disabled] { opacity: .65; background: transparent; }
+.search-content { padding: 0 28rpx; }
+.search-history-card { background: #fffefa; border-radius: 30rpx; box-shadow: 0 6rpx 24rpx rgba(155,112,30,.06); overflow: hidden; }
+.search-history-heading { display: flex; align-items: center; justify-content: space-between; min-height: 94rpx; padding: 0 28rpx; border-bottom: 1rpx solid #f6f1e5; font-size: 32rpx; font-weight: 700; }
+.search-empty { display: flex; flex-direction: column; align-items: center; padding: 42rpx 24rpx 52rpx; text-align: center; }
+.search-empty-image { display: block; width: 350rpx; height: 310rpx; margin-bottom: 24rpx; }
+.search-state-title { font-size: 32rpx; font-weight: 700; line-height: 1.5; color: #35291e; }
+.search-state-hint { margin-top: 12rpx; font-size: 26rpx; color: #998a75; line-height: 1.5; }
+.search-history-tags { display: flex; flex-wrap: wrap; gap: 16rpx; padding: 26rpx 28rpx 32rpx; }
+.search-history-tag { max-width: 100%; padding: 12rpx 24rpx; margin: 0; border-radius: 40rpx; background: #fff0bb; color: #6d5733; font-size: 26rpx; line-height: 1.5; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.search-pressed { background: #ffe9a2; }
+.search-status { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24rpx; min-height: 260rpx; padding: 32rpx; box-sizing: border-box; border-radius: 30rpx; background: #fffefa; color: #998a75; font-size: 26rpx; text-align: center; }
+.search-loading-dot { width: 22rpx; height: 22rpx; border-radius: 50%; background: #edb328; animation: search-pulse 1s ease-in-out infinite alternate; }
+@keyframes search-pulse { from { opacity: .35; } to { opacity: 1; } }
+.search-retry { margin: 0; background: #fff0bb; color: #916c22; }
+.search-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16rpx; }
+.search-dish-card { width: 100%; min-width: 0; margin: 0; padding: 8rpx 8rpx 0; box-sizing: border-box; border-radius: 22rpx; background: #fffefa; color: #35291e; box-shadow: 0 5rpx 16rpx rgba(155,112,30,.07); }
+.search-dish-ratio { position: relative; width: 100%; padding-top: 100%; }
+.search-dish-image { position: absolute; inset: 0; border-radius: 14rpx; overflow: hidden; }
+.search-dish-caption { display: flex; align-items: center; justify-content: center; min-height: 68rpx; padding: 10rpx 4rpx; box-sizing: border-box; }
+.search-dish-caption text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 28rpx; font-weight: 500; line-height: 1.4; word-break: break-all; }
+.search-footer { padding: 26rpx 0 8rpx; text-align: center; color: #aaa394; font-size: 24rpx; }
+@media screen and (max-height: 550px) { .search-empty { padding-top: 28rpx; padding-bottom: 32rpx; } .search-empty-image { width: 290rpx; height: 260rpx; } }
 </style>
